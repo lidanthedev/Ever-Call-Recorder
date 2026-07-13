@@ -943,6 +943,7 @@ private fun RecordingSection(
     val recordWhatsAppCalls = remember(updateTrigger) { preferences.isRecordWhatsAppCallsEnabled() }
     val recordTelegramCalls = remember(updateTrigger) { preferences.isRecordTelegramCallsEnabled() }
     var showAppCallRecordingDialog by remember { mutableStateOf(false) }
+    var showAppCallRecordingUnavailableDialog by remember { mutableStateOf(false) }
     val appCallRecordingSummary = buildList {
         if (recordWhatsAppCalls) add(stringResource(R.string.app_call_target_whatsapp))
         if (recordTelegramCalls) add(stringResource(R.string.app_call_target_telegram))
@@ -1007,7 +1008,7 @@ private fun RecordingSection(
             headline = stringResource(R.string.settings_app_call_recording_label),
             supporting = appCallRecordingSummary,
             supportingColor = if (appCallRecordingEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            onClick = { showAppCallRecordingDialog = true }
+            onClick = { showAppCallRecordingUnavailableDialog = true }
         )
         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
         SectionListItem(icon = storageIcon, headline = stringResource(R.string.settings_recording_folder_label), supporting = storageSupportingText, supportingColor = MaterialTheme.colorScheme.primary, onClick = onStorageClick)
@@ -1061,6 +1062,24 @@ private fun RecordingSection(
 
     if (showFileNameFormatDialog) {
         FileNameFormatDialog(initialFormat = fileNameFormat, onConfirm = { format -> actions.setFileNameTemplate(format); showFileNameFormatDialog = false }, onDismiss = { showFileNameFormatDialog = false })
+    }
+
+    if (showAppCallRecordingUnavailableDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showAppCallRecordingUnavailableDialog = false
+                showAppCallRecordingDialog = true
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showAppCallRecordingUnavailableDialog = false
+                    showAppCallRecordingDialog = true
+                }) {
+                    Text(stringResource(R.string.general_close))
+                }
+            },
+            text = { Text(stringResource(R.string.settings_app_call_recording_unavailable_message)) }
+        )
     }
 
     if (showAppCallRecordingDialog) {

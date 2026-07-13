@@ -14,6 +14,13 @@ Ever Call Recorder is the best <b> NON ROOT </b> Open - Source Call recorder whi
 
 <br>
 
+# Featured On...
+
+Thanks To All Of Them Who Recommended This Cool App ❤️
+
+┈➤ [popMODS](https://t.me/popMODS/8538)<br><br>
+┈➤ [Tech Karan](https://www.youtube.com/watch?v=UtT6JNNO8VA)
+
 # ⭐ Rate and Review
 Everyone's Ratings: [Click Here](https://hari161008.github.io/Website-For-Everlasting-Android-Tweak/Ratings%20Reviews/Ever%20Call%20Recorder/Ever_Call_Recorder.html)
 
