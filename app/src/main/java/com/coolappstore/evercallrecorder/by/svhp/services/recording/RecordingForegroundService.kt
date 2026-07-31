@@ -190,8 +190,34 @@ class RecordingForegroundService : Service() {
         when (action) {
             ACTION_START_RECORDING, ACTION_MANUAL_START -> {
                 if (hasSession || isCurrentlyRecording) {
-                    AppLogger.w(TAG, "Start request ignored. A session is already on-going.")
-                    return START_NOT_STICKY
+                    // VoIP-over-telephony priority switch: on devices where app calls (e.g. WhatsApp)
+                    // also fire PHONE_STATE broadcasts, the telephony path usually wins the race by a
+                    // few hundred ms and starts a scrcpy session with sourceApp=null metadata. When the
+                    // "Samsung Screen Recorder" source is selected, a later VoIP start intent (which
+                    // carries sourceApp) must REPLACE that session — otherwise the screen recorder
+                    // never starts. The partial telephony recording is discarded (cancel deletes it).
+                    val activeMeta = currentState.metadata
+                    val shouldSwitchToVoipBackend = activeMeta?.sourceApp == null &&
+                        currentMeta?.sourceApp != null &&
+                        runCatching {
+                            com.coolappstore.evercallrecorder.by.svhp.integrations.scrcpy.ScrcpyAudioSource
+                                .fromKey(appPreferences.getAudioSource()).isScreenRecorderBackend
+                        }.getOrDefault(false)
+
+                    if (!shouldSwitchToVoipBackend) {
+                        AppLogger.w(TAG, "Start request ignored. A session is already on-going.")
+                        return START_NOT_STICKY
+                    }
+
+                    AppLogger.i(TAG, "VoIP call detected while a telephony session is active. Switching to the screen recorder backend for ${currentMeta?.sourceApp}.")
+                    val oldEngine = (currentState as? RecordingServiceState.Active)?.engine
+                    currentState = RecordingServiceState.Standby(currentMeta)
+                    if (oldEngine != null) {
+                        serviceScope.launch {
+                            withContext(Dispatchers.IO) { oldEngine.cancel(this@RecordingForegroundService, shellService) }
+                        }
+                    }
+                    // Fall through to the normal start flow below with the VoIP metadata.
                 }
 
                 // At this point, we should already have the metadata from the intents, if it's missing, there's a logic error to be fixed.
