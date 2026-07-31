@@ -165,7 +165,7 @@
     <string name="app_call_target_whatsapp" translatable="false">WhatsApp</string>
     <string name="app_call_target_telegram" translatable="false">Telegram</string>
     <string name="recording_notification_via_app">Recording call via %1$s</string>
-    <string name="settings_app_call_recording_unavailable_message">This feature doesn\'t work right now</string>
+    <string name="settings_app_call_recording_unavailable_message">This feature is experimental and may not work on all devices or app versions. On Samsung devices, selecting the "Samsung Screen Recorder" audio source is recommended.</string>
 
     <string name="settings_auto_record_incoming">Automatically record incoming calls</string>
     <string name="settings_auto_record_outgoing">Automatically record outgoing calls</string>
