@@ -64,14 +64,6 @@ class AudioRecordingEngine {
      */
     var screenRecordingSession: ScreenRecordingSession? = null
 
-    /**
-     * True when this session ran on the Samsung screen-recorder backend. Survives
-     * [releaseSuspend] (unlike [screenRecordingSession]) so the caller can still pick the
-     * correct file extension (.m4a) for late renames.
-     */
-    var usedScreenRecorderBackend: Boolean = false
-        private set
-
     /** Metadata captured during the [startPipeline] and locked. Used for checks in [release] if we need to query call logs for the final file name if phone number is empty. */
     var initializationMetadata: RecordingMetadata? = null
         set(value) {
@@ -286,7 +278,6 @@ class AudioRecordingEngine {
         )
         session.start() // Throws PipelineInitializationException on any preflight/start failure.
         screenRecordingSession = session
-        usedScreenRecorderBackend = true
         currentCodecEnum = ScrcpyAudioCodec.AAC // The imported recording is an .m4a (AAC track).
     }
 
@@ -312,6 +303,8 @@ class AudioRecordingEngine {
                 if (currentRecordingUri == null) {
                     AppLogger.w(TAG, "Screen recording import returned no file; the mp4 (if any) remains in DCIM/Screen recordings")
                 }
+            }.onFailure {
+                AppLogger.e(TAG, "Screen recording import failed with an exception; the mp4 (if any) remains in DCIM/Screen recordings", it)
             }
             screenRecordingSession = null
         }
@@ -319,10 +312,8 @@ class AudioRecordingEngine {
         runCatching { shellService?.stopRecording() }
 
         runCatching {
-            runBlocking {
-                withTimeoutOrNull(2000L) {
-                    audioPipeReadJob?.join()
-                }
+            withTimeoutOrNull(2000L) {
+                audioPipeReadJob?.join()
             }
         }
 
@@ -336,6 +327,10 @@ class AudioRecordingEngine {
     /**
      * Blocking variant of [releaseSuspend], for callers that cannot suspend (e.g. Service.onDestroy).
      * Prefer [releaseSuspend] whenever a coroutine context is available.
+     *
+     * **Must not be called on the main thread for screen-recorder sessions**: the import can
+     * block for many seconds (stop polling + file transfer + audio extraction). Callers on the
+     * main thread must offload to [Dispatchers.IO] instead.
      */
     fun release(shellService: IShellService?) = runBlocking { releaseSuspend(shellService) }
 

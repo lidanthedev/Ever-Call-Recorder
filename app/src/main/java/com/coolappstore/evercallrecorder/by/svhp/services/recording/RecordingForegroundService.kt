@@ -321,11 +321,24 @@ class RecordingForegroundService : Service() {
         serviceScope.cancel()
         // The service scope is cancelled above, so the coroutine inside stopRecordingSessionAndService
         // would never run. If a session is still active at this point (e.g. OS-driven destroy), release
-        // it with the blocking variant. Release is idempotent (guarded runCatching + null checks), so
+        // it as a last resort. Release is idempotent (guarded runCatching + null checks), so
         // this is also safe right after a normal stop.
         (currentState as? RecordingServiceState.Active)?.engine?.let { activeSession ->
-            AppLogger.w(TAG, "onDestroy with an active session, releasing it synchronously as a last resort")
-            runCatching { activeSession.release(shellService) }
+            if (activeSession.screenRecordingSession != null) {
+                // Screen-recorder release can block for many seconds (stop polling + file import
+                // + audio extraction) — never block the main thread in onDestroy. Fire it on a
+                // detached IO coroutine instead; the process lives briefly after onDestroy (same
+                // assumption as the CallLog rename fallback below). If the process dies first, the
+                // original mp4 still remains in DCIM/Screen recordings.
+                AppLogger.w(TAG, "onDestroy with an active screen-recorder session, releasing it in the background")
+                CoroutineScope(Dispatchers.IO).launch {
+                    runCatching { activeSession.releaseSuspend(shellService) }
+                }
+            } else {
+                // Scrcpy release is fast and internally time-bounded; safe to run synchronously.
+                AppLogger.w(TAG, "onDestroy with an active session, releasing it synchronously as a last resort")
+                runCatching { activeSession.release(shellService) }
+            }
             currentState = RecordingServiceState.Standby(null)
         }
         shizukuManager.unbind()
@@ -402,9 +415,11 @@ class RecordingForegroundService : Service() {
 
         // Synchronously mark the session as ended so duplicate stop requests and onDestroy skip a second release.
         currentState = RecordingServiceState.Standby(null)
+        // Mark the release as in-flight BEFORE launching, so a concurrent stop request (or
+        // onDestroy) observes it immediately, not only once the coroutine gets scheduled.
+        releaseInFlight = true
 
         serviceScope.launch {
-            releaseInFlight = true
             try {
                 // Release all resources held by the recording session, and stop the remote shell service, finalizing the recording file.
                 // For the screen-recorder backend this also imports the recording and sets currentRecordingUri.
@@ -428,9 +443,10 @@ class RecordingForegroundService : Service() {
                     val finalNumber = if (sanitizedRaw.isNotBlank()) {
                         val parsed = phoneNumberManager.parsePhoneNumber(sanitizedRaw)
                         if (parsed != null) {
-                            phoneNumberManager.formatToE164(parsed)
+                            phoneNumberManager.formatToE164(parsed) ?: sanitizedRaw
+                        } else {
+                            sanitizedRaw
                         }
-                        sanitizedRaw
                     } else {
                         sanitizedRaw
                     }
