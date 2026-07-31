@@ -202,6 +202,8 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     override fun triggerDebugScreenRecorderTest() {
         viewModelScope.launch {
             val connectionManager = ShizukuConnectionManager(appContext)
+            // Hoisted so the cancellation path can still stop and import the recorder session.
+            var session: ScreenRecordingSession? = null
             try {
                 val metadata = RecordingMetadata(
                     rawPhoneNumber = DEBUG_SCREEN_RECORDER_CONTACT_NAME,
@@ -213,7 +215,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                 android.widget.Toast.makeText(appContext, appContext.getString(R.string.settings_debug_screen_recorder_starting), android.widget.Toast.LENGTH_SHORT).show()
 
                 val shellService = connectionManager.getShellService()
-                val session = ScreenRecordingSession(appContext, shellService, metadata, backendKey)
+                session = ScreenRecordingSession(appContext, shellService, metadata, backendKey)
                 session.start()
                 kotlinx.coroutines.delay(DEBUG_SCREEN_RECORDER_DURATION_MS)
                 val uri = session.stopAndImport()
@@ -225,6 +227,17 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                     AppLogger.e(TAG, "Debug screen recorder test failed: stopAndImport returned no file")
                     android.widget.Toast.makeText(appContext, appContext.getString(R.string.settings_debug_screen_recorder_failed, "import returned no file"), android.widget.Toast.LENGTH_LONG).show()
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Cancellation is not a test failure — but the recorder may still be running,
+                // so stop and import it in a non-cancellable context before rethrowing.
+                AppLogger.d(TAG, "Debug screen recorder test cancelled; stopping session before rethrow")
+                session?.let { activeSession ->
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                        runCatching { activeSession.stopAndImport() }
+                            .onFailure { AppLogger.w(TAG, "Failed to stop recorder session during cancellation cleanup", it) }
+                    }
+                }
+                throw e
             } catch (e: Exception) {
                 AppLogger.e(TAG, "Debug screen recorder test failed", e)
                 android.widget.Toast.makeText(appContext, appContext.getString(R.string.settings_debug_screen_recorder_failed, e.message ?: e.javaClass.simpleName), android.widget.Toast.LENGTH_LONG).show()

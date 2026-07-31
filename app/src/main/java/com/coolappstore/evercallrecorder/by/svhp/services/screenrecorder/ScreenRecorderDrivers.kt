@@ -11,12 +11,15 @@ package com.coolappstore.evercallrecorder.by.svhp.services.screenrecorder
 /**
  * Registry of all screen recorder drivers, keyed by `ScrcpyAudioSource.screenRecorderBackendKey`.
  *
- * Adding support for a new vendor's system screen recorder requires exactly three things:
+ * Adding support for a new vendor's system screen recorder requires exactly four things:
  *  1. A new [ScreenRecorderDriver] subclass in this package (see the class kdoc for the contract).
  *  2. One line in [registry] below mapping its backend key to its factory.
  *  3. A new entry in `ScrcpyAudioSource` carrying the same `screenRecorderBackendKey`
  *     (plus its strings, and its availability gate in
  *     [com.coolappstore.evercallrecorder.by.svhp.integrations.screenrecorder.ScreenRecorderBackends]).
+ *  4. The vendor recorder package added to `packageNames` in
+ *     `res/xml/screen_recorder_accessibility_service.xml` (static xml — accessibility
+ *     confirmation cannot see the vendor's dialog without it).
  */
 object ScreenRecorderDrivers {
 
@@ -38,5 +41,20 @@ object ScreenRecorderDrivers {
         val created = registry[backendKey]?.invoke() ?: return null
         instances[backendKey] = created
         return created
+    }
+
+    /**
+     * Returns the driver whose [ScreenRecorderDriver.recorderPackage] matches [packageName],
+     * or null when no registered backend owns that package. Used by the app-side
+     * [ScreenRecorderAccessibilityService] to route window events to the right vendor driver.
+     * Instantiates drivers lazily as needed; instances are shared with [forKey].
+     */
+    @Synchronized
+    fun forPackage(packageName: String): ScreenRecorderDriver? {
+        for (key in registry.keys) {
+            val driver = forKey(key) ?: continue
+            if (driver.recorderPackage == packageName) return driver
+        }
+        return null
     }
 }

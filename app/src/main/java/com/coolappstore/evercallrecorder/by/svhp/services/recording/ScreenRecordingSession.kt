@@ -37,8 +37,8 @@ import java.nio.ByteBuffer
  * broken (Android 16). Flow (see docs/SHIZUKU_SYSTEM_RECORD.md for the full rationale):
  *
  *  1. [start]: preflight checks → the shell process wakes the screen, clicks the recorder QS
- *     tile, confirms the "Start recording" dialog shell-side (uiautomator dump + input tap,
- *     see docs/record.sh) and polls `dumpsys media_projection`. Start succeeds when the
+ *     tile, confirms the "Start recording" dialog (see docs/SHIZUKU_SYSTEM_RECORD.md) and
+ *     polls `dumpsys media_projection`. Start succeeds when the
  *     projection session is reported active (Samsung's ~3s countdown included).
  *  2. [stopAndImport]: the shell process clicks the tile again to stop, waits for the mp4 to
  *     appear in /sdcard/DCIM/Screen recordings/, and streams it back over a binder pipe FD.

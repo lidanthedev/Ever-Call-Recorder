@@ -54,6 +54,13 @@ class SamsungScreenRecorderDriver : ScreenRecorderDriver() {
     override val backendKey = "samsung"
     override val recorderPackage = SAMSUNG_CAPTURE_PACKAGE
 
+    /**
+     * The "Media and mic" audio option container in the start dialog. Also the START-dialog
+     * discriminator for the accessibility confirmation (post-start dialogs lack this node).
+     * The positive button uses the framework AlertDialog id from the base default.
+     */
+    override val startDialogRequiredAudioOptionId = "$SAMSUNG_CAPTURE_PACKAGE:id/$DIALOG_AUDIO_MEDIA_AND_MIC_ID"
+
     // ── Prerequisites: QS tile must be in the layout or click-tile silently no-ops ──
 
     /** Checked only once per driver lifetime to keep session starts fast. */
@@ -86,8 +93,8 @@ class SamsungScreenRecorderDriver : ScreenRecorderDriver() {
     /**
      * Waits for Samsung's recorder confirmation dialog and taps its positive button.
      *
-     * Instead of a separate `dumpsys window` focus poll followed by a single dump (record.sh
-     * style), this loops `uiautomator dump` directly: on the fast path the dialog is already in
+     * Instead of a separate `dumpsys window` focus poll followed by a single dump (bash
+     * reference in docs/SHIZUKU_SYSTEM_RECORD.md style), this loops `uiautomator dump` directly: on the fast path the dialog is already in
      * the first dump (~0.5–1 s saved per start). Matches the button by resource-id first
      * (locale-safe), with the (localized) text as a fallback.
      *

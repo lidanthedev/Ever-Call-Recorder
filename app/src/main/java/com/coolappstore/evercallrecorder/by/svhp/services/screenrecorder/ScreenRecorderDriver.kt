@@ -18,12 +18,16 @@ import java.io.File
  *
  * ## What a NEW screen recorder must implement
  *  - [backendKey]         — stable key matching `ScrcpyAudioSource.screenRecorderBackendKey`.
- *  - [recorderPackage]    — package owning the recorder; used for the MediaProjection state check.
+ *  - [recorderPackage]    — package owning the recorder; used for the MediaProjection state check
+ *                           AND by the accessibility confirmation service to match window events.
  *  - [requestStart]       — the actual start trigger (e.g. a QS tile click). Warning: most tiles
  *                           TOGGLE — [startRecording] guards against an already-active session.
  *  - [requestStop]        — the actual stop trigger (may be the same toggle as [requestStart]).
  *  - [findLatestRecording]— locate the newest finalized recording file (vendor output dir,
  *                           file pattern, "pending file" semantics) with mtime >= a given epoch.
+ *  - The recorder's package must also be added to `packageNames` in
+ *    `res/xml/screen_recorder_accessibility_service.xml` (static xml, cannot be derived from
+ *    the registry) for the accessibility confirmation mode to see its dialog.
  *
  * ## Optional hooks (defaults cover recorders with no dialog/countdown)
  *  - [isRecordingActive]   — default: `dumpsys media_projection` mentions [recorderPackage].
@@ -78,6 +82,22 @@ abstract class ScreenRecorderDriver {
     /** Package owning the screen recorder (checked in the MediaProjection dumpsys). */
     abstract val recorderPackage: String
 
+    // ── Start-dialog description (used by the app-side accessibility confirmation) ──
+
+    /**
+     * Fully-qualified view id of the start dialog's positive ("Start recording") button.
+     * Default is the framework AlertDialog positive-button id, which covers most vendors.
+     */
+    open val startDialogButtonId: String = "android:id/button1"
+
+    /**
+     * Fully-qualified view id of the start dialog's audio-option container that must be selected
+     * (e.g. Samsung's "Media and mic"), or null when the vendor's dialog has no such option.
+     * Also serves as the START-dialog discriminator: post-start dialogs share
+     * [startDialogButtonId] but never contain this node.
+     */
+    open val startDialogRequiredAudioOptionId: String? = null
+
     // ── Vendor hooks ─────────────────────────────────────────────────────────
 
     /** True while a recording session owned by [recorderPackage] is active. */
@@ -126,6 +146,10 @@ abstract class ScreenRecorderDriver {
      * Safety: refuses to trigger when a session is already active (start/stop triggers usually
      * toggle — firing would STOP the user's own ongoing recording instead).
      *
+     * Concurrency: synchronized on the driver instance — AIDL calls arrive on the Binder
+     * thread pool, so a concurrent [stopRecording] (or second start) must not interleave
+     * with this method's active-state check and trigger sequence.
+     *
      * @param confirmMode [CONFIRM_UIAUTOMATOR] (default): the shell process drives [confirmStart]
      * (uiautomator dump + input tap) then [afterStartConfirmed]. [CONFIRM_ACCESSIBILITY]: the
      * app-side accessibility service confirms the dialog on its own, so this process skips
@@ -134,6 +158,7 @@ abstract class ScreenRecorderDriver {
      * — no uiautomator dumps.
      * @return true if the session became active within [STATE_TIMEOUT_MS].
      */
+    @Synchronized
     fun startRecording(confirmMode: Int = CONFIRM_UIAUTOMATOR): Boolean {
         if (isRecordingActive()) {
             AppLogger.w(tag, "startRecording() refused: a screen recording is already active (triggers toggle, firing would stop it)")
@@ -184,9 +209,11 @@ abstract class ScreenRecorderDriver {
     /**
      * Stops the recorder and verifies the session actually ended. Never fires the trigger when
      * no session is active (a toggling trigger would START a recording otherwise).
+     * Synchronized with [startRecording] — see its concurrency note.
      *
      * @return true if no session is active when this method returns (stopped or never ran).
      */
+    @Synchronized
     fun stopRecording(): Boolean {
         if (!isRecordingActive()) {
             AppLogger.d(tag, "stopRecording(): no active session, nothing to stop")

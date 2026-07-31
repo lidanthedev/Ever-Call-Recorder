@@ -1340,8 +1340,9 @@ private fun AudioSection(preferences: AppPreferences, updateTrigger: Int, action
             // Apps (VoIP) calls: only sources that can capture app-call audio (OUTPUT, screen recorder backends).
             // Screen recorder backends are greyed out when their recorder package is not installed on this device.
             val appsSourceOptions = ScrcpyAudioSource.entries.filter { it.isAppsAudioSource }.map { source ->
-                val backendSupported = source.screenRecorderBackendKey == null ||
-                    com.coolappstore.evercallrecorder.by.svhp.integrations.screenrecorder.ScreenRecorderBackends.isSupported(context, source.screenRecorderBackendKey!!)
+                val backendKey = source.screenRecorderBackendKey
+                val backendSupported = backendKey == null ||
+                    com.coolappstore.evercallrecorder.by.svhp.integrations.screenrecorder.ScreenRecorderBackends.isSupported(context, backendKey)
                 OptionItem(
                     key = source.cliKey,
                     label = stringResource(source.titleResId),

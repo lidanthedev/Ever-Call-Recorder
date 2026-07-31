@@ -189,6 +189,7 @@ class RecordingForegroundService : Service() {
 
         when (action) {
             ACTION_START_RECORDING, ACTION_MANUAL_START -> {
+                var oldEngineToCancel: AudioRecordingEngine? = null
                 if (hasSession || isCurrentlyRecording) {
                     // VoIP-over-telephony priority switch: on devices where app calls (e.g. WhatsApp)
                     // also fire PHONE_STATE broadcasts, the telephony path usually wins the race by a
@@ -210,14 +211,11 @@ class RecordingForegroundService : Service() {
                     }
 
                     AppLogger.i(TAG, "VoIP call detected while a telephony session is active. Switching to the screen recorder backend for ${currentMeta?.sourceApp}.")
-                    val oldEngine = (currentState as? RecordingServiceState.Active)?.engine
+                    oldEngineToCancel = (currentState as? RecordingServiceState.Active)?.engine
                     currentState = RecordingServiceState.Standby(currentMeta)
-                    if (oldEngine != null) {
-                        serviceScope.launch {
-                            withContext(Dispatchers.IO) { oldEngine.cancel(this@RecordingForegroundService, shellService) }
-                        }
-                    }
-                    // Fall through to the normal start flow below with the VoIP metadata.
+                    // The old engine's cancellation is awaited inside the startup coroutine below,
+                    // BEFORE the new session touches the shell service — the two sessions must never
+                    // drive the recorder/scrcpy pipeline concurrently.
                 }
 
                 // At this point, we should already have the metadata from the intents, if it's missing, there's a logic error to be fixed.
@@ -234,6 +232,11 @@ class RecordingForegroundService : Service() {
                 tryStartShizukuServer()
 
                 serviceScope.launch {
+                    // Session switch: finish cancelling the replaced session first (screen-recorder
+                    // stop + file discard) so it cannot overlap the new session's start sequence.
+                    if (oldEngineToCancel != null) {
+                        withContext(Dispatchers.IO) { oldEngineToCancel.cancel(this@RecordingForegroundService, shellService) }
+                    }
                     try {
                         // Wait for Shizuku server to be available
                         ShizukuConnectionManager.waitForServer()

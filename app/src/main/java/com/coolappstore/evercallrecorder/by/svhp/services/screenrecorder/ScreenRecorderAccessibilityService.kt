@@ -23,35 +23,31 @@ import com.coolappstore.evercallrecorder.by.svhp.data.AppPreferences
 import com.coolappstore.evercallrecorder.by.svhp.utils.AppLogger
 
 /**
- * App-side [AccessibilityService] that confirms Samsung's screen recorder "Start recording"
+ * App-side [AccessibilityService] that confirms a system screen recorder's "Start recording"
  * dialog in-memory, replacing the slow shell-side `uiautomator dump` + `input tap` path
  * (~2-5 s per dump → ~10-30 ms node lookup). Selected via the "Recorder dialog confirmation"
  * setting ([com.coolappstore.evercallrecorder.by.svhp.data.AppPreferences.ScreenRecorderConfirmMode]).
  *
- * It mirrors exactly what the uiautomator path does in [SamsungScreenRecorderDriver.confirmStart]:
+ * Vendor-agnostic: window events are routed to the [ScreenRecorderDriver] whose
+ * [ScreenRecorderDriver.recorderPackage] matches the event's package, and all dialog specifics
+ * (positive-button id, required audio-option id) come from that driver — nothing here is
+ * Samsung-specific. For the Samsung driver it:
  *  1. Forces the dialog's audio option to "Media and mic" (otherwise one side of the call is silent).
- *  2. Clicks the dialog's positive button (`android:id/button1`).
- *  3. Skips the ~3 s pre-recording countdown with [dispatchGesture] center taps. The shell
+ *  2. Clicks the dialog's positive button.
+ *  3. Skips the pre-recording countdown with [dispatchGesture] center taps. The shell
  *     process ALSO fires its own blind `input tap`s [ScreenRecorderDriver.EXTERNAL_CONFIRM_TAP_DELAY_MS]
  *     after the tile click in this mode — belt and suspenders; extra center taps are harmless.
  *
- * The service is restricted (via its xml config) to the Smart Capture package only, so it sees
- * no other app's windows. The user must enable it manually in system Accessibility settings;
- * when it is not enabled, the recording flow falls back to the uiautomator path automatically.
- * It also self-gates on the confirmation-mode preference so both mechanisms never race the
- * same dialog.
+ * The service is restricted (via its xml config `packageNames`) to the registered recorder
+ * packages only, so it sees no other app's windows. The user must enable it manually in system
+ * Accessibility settings; when it is not enabled, the recording flow falls back to the
+ * uiautomator path automatically. It also self-gates on the confirmation-mode preference so
+ * both mechanisms never race the same dialog.
  */
 class ScreenRecorderAccessibilityService : AccessibilityService() {
 
     companion object {
-        private const val TAG = "SCR:ScreenRecorderA11y"
-
-        /** Fully-qualified view id of the dialog's positive ("Start recording") button. Locale-safe. */
-        private const val DIALOG_BUTTON_ID = "android:id/button1"
-
-        /** View id of the "Media and mic" audio option (clickable container) in the recorder dialog. */
-        private const val MEDIA_AND_MIC_ID =
-            "${SamsungScreenRecorderDriver.SAMSUNG_CAPTURE_PACKAGE}:id/${SamsungScreenRecorderDriver.DIALOG_AUDIO_MEDIA_AND_MIC_ID}"
+        private const val TAG = "SCR:ScreenRecorderAccessibilityService"
 
         /** Min delay between two positive-button clicks; repeated window events fire in bursts. */
         private const val CLICK_DEBOUNCE_MS = 2_000L
@@ -80,14 +76,20 @@ class ScreenRecorderAccessibilityService : AccessibilityService() {
     @Volatile
     private var lastButtonClickMs = 0L
 
+    /** Single lazily-created preferences instance reused across events. Reads are always live
+     * (SharedPreferences), so the confirmation-mode gate below still sees the current value. */
+    private val preferences by lazy { AppPreferences(this) }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event?.packageName != SamsungScreenRecorderDriver.SAMSUNG_CAPTURE_PACKAGE) return
+        val packageName = event?.packageName?.toString() ?: return
+        // Route to the vendor driver owning this recorder package; ignore everything else.
+        val driver = ScreenRecorderDrivers.forPackage(packageName) ?: return
 
         // Self-gate: only act when the user actually selected the accessibility confirmation
         // mode. Without this, the uiautomator flow and this service race on the same dialog:
         // the service dismisses it instantly, the shell-side dump then never sees the button
         // and reports a false "session never became active" failure while the recorder runs.
-        if (AppPreferences(this).getScreenRecorderConfirmMode() != AppPreferences.ScreenRecorderConfirmMode.ACCESSIBILITY) return
+        if (preferences.getScreenRecorderConfirmMode() != AppPreferences.ScreenRecorderConfirmMode.ACCESSIBILITY) return
 
         // A previous attempt at this service failed because the dialog never got clicked: the
         // recorder dialog is a system alert and may NOT be the "active" window, so the node tree
@@ -95,8 +97,8 @@ class ScreenRecorderAccessibilityService : AccessibilityService() {
         val roots = listOfNotNull(rootInActiveWindow, event.source)
         try {
             for (root in roots) {
-                ensureMediaAndMicSelected(root)
-                clickStartButton(root)
+                ensureRequiredAudioOptionSelected(root, driver)
+                clickStartButton(root, driver)
             }
         } catch (e: Exception) {
             AppLogger.w(TAG, "Error while handling recorder dialog: ${e.message}")
@@ -108,17 +110,19 @@ class ScreenRecorderAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Selects the "Media and mic" audio option when it is not already checked.
-     * The checked state lives on the (child) checkable node; the container with
-     * [MEDIA_AND_MIC_ID] is the clickable one.
+     * Selects the driver's required audio option (e.g. Samsung's "Media and mic") when it is
+     * not already checked. No-op for vendors whose dialog has no such option
+     * ([ScreenRecorderDriver.startDialogRequiredAudioOptionId] is null).
+     * The checked state lives on the (child) checkable node; the container is the clickable one.
      */
-    private fun ensureMediaAndMicSelected(root: AccessibilityNodeInfo) {
-        val container = root.findAccessibilityNodeInfosByViewId(MEDIA_AND_MIC_ID)?.firstOrNull() ?: return
+    private fun ensureRequiredAudioOptionSelected(root: AccessibilityNodeInfo, driver: ScreenRecorderDriver) {
+        val optionId = driver.startDialogRequiredAudioOptionId ?: return
+        val container = root.findAccessibilityNodeInfosByViewId(optionId)?.firstOrNull() ?: return
         if (isChecked(container)) {
-            AppLogger.v(TAG, "'Media and mic' audio option already selected")
+            AppLogger.v(TAG, "Required audio option already selected")
             return
         }
-        AppLogger.i(TAG, "Selecting 'Media and mic' audio option")
+        AppLogger.i(TAG, "Selecting required audio option ($optionId)")
         container.performAction(AccessibilityNodeInfo.ACTION_CLICK)
     }
 
@@ -132,22 +136,23 @@ class ScreenRecorderAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Clicks the dialog's positive ("Start recording") button, debounced: the same dialog fires
-     * several window events in a row, and a double click could reach the recorder UI underneath.
+     * Clicks the start dialog's positive button, debounced: the same dialog fires several
+     * window events in a row, and a double click could reach the recorder UI underneath.
      *
-     * Double-click / wrong-dialog guard: later recorder dialogs (e.g. a stop confirmation) share
-     * `android:id/button1`, so the button is only clicked when the audio-options node
-     * ([MEDIA_AND_MIC_ID]) exists in the same window — that node is unique to the START dialog.
-     * Once the recorder session is running, no other dialog gets auto-clicked.
+     * Double-click / wrong-dialog guard: later recorder dialogs (e.g. a stop confirmation) can
+     * share the same positive-button id, so the button is only clicked when the driver's
+     * required audio-option node exists in the same window — that node is unique to the START
+     * dialog. Once the recorder session is running, no other dialog gets auto-clicked.
+     * (For drivers WITHOUT a required audio option, the button-id match alone decides.)
      *
      * On success, schedules the countdown-skip taps (the shell-side flow cannot time them in
      * accessibility mode — it does not know when the dialog closes).
      */
-    private fun clickStartButton(root: AccessibilityNodeInfo) {
-        val isStartDialog = !root.findAccessibilityNodeInfosByViewId(MEDIA_AND_MIC_ID).isNullOrEmpty()
-        if (!isStartDialog) return
+    private fun clickStartButton(root: AccessibilityNodeInfo, driver: ScreenRecorderDriver) {
+        val optionId = driver.startDialogRequiredAudioOptionId
+        if (optionId != null && root.findAccessibilityNodeInfosByViewId(optionId).isNullOrEmpty()) return
 
-        val button = root.findAccessibilityNodeInfosByViewId(DIALOG_BUTTON_ID)?.firstOrNull() ?: return
+        val button = root.findAccessibilityNodeInfosByViewId(driver.startDialogButtonId)?.firstOrNull() ?: return
         val now = System.currentTimeMillis()
         if (now - lastButtonClickMs < CLICK_DEBOUNCE_MS) return
 
@@ -160,9 +165,9 @@ class ScreenRecorderAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Skips Samsung's ~3 s pre-recording countdown by tapping the screen center via
-     * [dispatchGesture] (the accessibility-mode replacement for the shell-side `input tap`
-     * in [SamsungScreenRecorderDriver.afterStartConfirmed], which is skipped in this mode).
+     * Skips a pre-recording countdown by tapping the screen center via [dispatchGesture]
+     * (the accessibility-mode replacement for the shell-side `input tap` in
+     * [SamsungScreenRecorderDriver.afterStartConfirmed], which is skipped in this mode).
      * Multiple spaced taps because the overlay's appearance time varies; a stray center tap
      * on an in-call screen is harmless (avatar area). Best-effort.
      */
