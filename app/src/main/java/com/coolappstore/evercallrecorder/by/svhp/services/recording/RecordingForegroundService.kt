@@ -215,7 +215,9 @@ class RecordingForegroundService : Service() {
                     if (oldEngine != null) {
                         serviceScope.launch {
                             withContext(Dispatchers.IO) { oldEngine.cancel(this@RecordingForegroundService, shellService) }
+                            beginSession(currentMeta)
                         }
+                        return START_NOT_STICKY
                     }
                     // Fall through to the normal start flow below with the VoIP metadata.
                 }
@@ -228,37 +230,7 @@ class RecordingForegroundService : Service() {
                     return START_NOT_STICKY // We won't reach this anyway.
                 }
 
-                currentState = RecordingServiceState.Starting(currentMeta)
-
-                // If enabled in the user preferences, we try to start the Shizuku as we are now starting the recording.
-                tryStartShizukuServer()
-
-                serviceScope.launch {
-                    try {
-                        // Wait for Shizuku server to be available
-                        ShizukuConnectionManager.waitForServer()
-                        val service = shizukuManager.getShellService()
-                        shellService = service // update local ref
-                        startNewRecordingSession(service, currentMeta)
-                    } catch (e: SecurityException) { // Shizuku permission not granted
-                        AppLogger.e(TAG, "Shizuku permission was denied / not granted", e)
-                        notificationHelper.showErrorNotification(getString(R.string.recording_shizuku_permission_denied))
-                        stopRecordingSessionAndService()
-                    } catch (e: Exception) { // Shizuku not running or other binding connection errors
-                        // Don't catch coroutine cancellations, they are used for cleanup. This creates a false error notification when everything's fine.
-                        if (e is CancellationException) throw e
-
-                        AppLogger.e(TAG, "Failed to perform ShellService binding with Shizuku. Ensure it is running, else look at error related to failed binding.", e)
-                        notificationHelper.showErrorNotification(getString(R.string.recording_shizuku_not_started) + "\nLocalized: " + e.localizedMessage)
-                        stopRecordingSessionAndService()
-                    } finally {
-                        if (currentState is RecordingServiceState.Starting) {
-                            if (!hasSession) {
-                                currentState = RecordingServiceState.Standby(currentMeta)
-                            }
-                        }
-                    }
-                }
+                beginSession(currentMeta)
             }
 
             ACTION_STANDBY -> {
@@ -294,6 +266,51 @@ class RecordingForegroundService : Service() {
             }
         }
         return START_NOT_STICKY
+    }
+
+    /**
+     * Starts a new recording session: updates state, starts Shizuku if needed, binds the shell
+     * service, and starts the pipeline. Suspends.
+     */
+    private fun beginSession(metadata: RecordingMetadata?) {
+        if (metadata == null) {
+            AppLogger.e(TAG, "beginSession called without metadata. Cannot start recording session.")
+            notificationHelper.showErrorNotification(getString(R.string.recording_unexpected_error))
+            stopRecordingSessionAndService()
+            return
+        }
+
+        currentState = RecordingServiceState.Starting(metadata)
+
+        // If enabled in the user preferences, we try to start the Shizuku as we are now starting the recording.
+        tryStartShizukuServer()
+
+        serviceScope.launch {
+            try {
+                // Wait for Shizuku server to be available
+                ShizukuConnectionManager.waitForServer()
+                val service = shizukuManager.getShellService()
+                shellService = service // update local ref
+                startNewRecordingSession(service, metadata)
+            } catch (e: SecurityException) { // Shizuku permission not granted
+                AppLogger.e(TAG, "Shizuku permission was denied / not granted", e)
+                notificationHelper.showErrorNotification(getString(R.string.recording_shizuku_permission_denied))
+                stopRecordingSessionAndService()
+            } catch (e: Exception) { // Shizuku not running or other binding connection errors
+                // Don't catch coroutine cancellations, they are used for cleanup. This creates a false error notification when everything's fine.
+                if (e is CancellationException) throw e
+
+                AppLogger.e(TAG, "Failed to perform ShellService binding with Shizuku. Ensure it is running, else look at error related to failed binding.", e)
+                notificationHelper.showErrorNotification(getString(R.string.recording_shizuku_not_started) + "\nLocalized: " + e.localizedMessage)
+                stopRecordingSessionAndService()
+            } finally {
+                if (currentState is RecordingServiceState.Starting) {
+                    if (!hasSession) {
+                        currentState = RecordingServiceState.Standby(metadata)
+                    }
+                }
+            }
+        }
     }
 
     /**

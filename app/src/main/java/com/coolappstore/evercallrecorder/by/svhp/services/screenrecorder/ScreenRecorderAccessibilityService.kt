@@ -44,7 +44,7 @@ import com.coolappstore.evercallrecorder.by.svhp.utils.AppLogger
 class ScreenRecorderAccessibilityService : AccessibilityService() {
 
     companion object {
-        private const val TAG = "SCR:ScreenRecorderA11y"
+        private const val TAG = "SCR:ScreenRecorderAccessibilityService"
 
         /** Fully-qualified view id of the dialog's positive ("Start recording") button. Locale-safe. */
         private const val DIALOG_BUTTON_ID = "android:id/button1"

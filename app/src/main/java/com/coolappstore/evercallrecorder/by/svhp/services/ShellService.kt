@@ -29,6 +29,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.io.IOException
 import java.io.InterruptedIOException
@@ -135,6 +137,12 @@ class ShellService : IShellService.Stub {
      * We keep this [shellScope] job reference so we can wait for late bytes to be relayed when shutting down in [stopRecording].
      */
     private var audioPipeRelayJob: Job? = null
+
+    /**
+     * Mutex serializing screen recorder start/stop operations at the AIDL boundary.
+     * Prevents concurrent Binder calls from racing on the active-state check and trigger sequence.
+     */
+    private val screenRecorderMutex = Mutex()
 
     // ---- Shizuku-required constructors
 
@@ -337,19 +345,27 @@ class ShellService : IShellService.Stub {
     // backendKey and delegate.
 
     override fun startScreenRecording(backendKey: String, confirmMode: Int): Boolean {
-        val driver = ScreenRecorderDrivers.forKey(backendKey) ?: run {
-            AppLogger.w(TAG, "startScreenRecording: unknown screen recorder backend '$backendKey'")
-            return false
+        return kotlinx.coroutines.runBlocking {
+            screenRecorderMutex.withLock {
+                val driver = ScreenRecorderDrivers.forKey(backendKey) ?: run {
+                    AppLogger.w(TAG, "startScreenRecording: unknown screen recorder backend '$backendKey'")
+                    return@runBlocking false
+                }
+                driver.startRecording(confirmMode)
+            }
         }
-        return driver.startRecording(confirmMode)
     }
 
     override fun stopScreenRecording(backendKey: String): Boolean {
-        val driver = ScreenRecorderDrivers.forKey(backendKey) ?: run {
-            AppLogger.w(TAG, "stopScreenRecording: unknown screen recorder backend '$backendKey'")
-            return false
+        return kotlinx.coroutines.runBlocking {
+            screenRecorderMutex.withLock {
+                val driver = ScreenRecorderDrivers.forKey(backendKey) ?: run {
+                    AppLogger.w(TAG, "stopScreenRecording: unknown screen recorder backend '$backendKey'")
+                    return@runBlocking false
+                }
+                driver.stopRecording()
+            }
         }
-        return driver.stopRecording()
     }
 
     override fun isScreenRecordingActive(backendKey: String): Boolean {
