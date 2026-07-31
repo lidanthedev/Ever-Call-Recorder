@@ -36,6 +36,7 @@ interface SettingsActions {
     fun setIgnoreContactsModeIncoming(modeEnum: AppPreferences.IgnoreContactsMode)
     fun setIgnoreContactsModeOutgoing(modeEnum: AppPreferences.IgnoreContactsMode)
     fun setAudioSource(source: String)
+    fun setAppsAudioSource(source: String)
     fun setAudioCodec(codec: String)
     fun setAudioBitRate(bitRate: Int)
     fun setThemeMode(mode: AppPreferences.ThemeMode)
@@ -112,6 +113,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     override fun setIgnoreContactsModeIncoming(modeEnum: AppPreferences.IgnoreContactsMode) { preferences.setIgnoreContactsModeIncoming(modeEnum); refresh() }
     override fun setIgnoreContactsModeOutgoing(modeEnum: AppPreferences.IgnoreContactsMode) { preferences.setIgnoreContactsModeOutgoing(modeEnum); refresh() }
     override fun setAudioSource(source: String) { preferences.setAudioSource(source); refresh() }
+    override fun setAppsAudioSource(source: String) { preferences.setAppsAudioSource(source); refresh() }
     override fun setAudioCodec(codec: String) {
         preferences.setAudioCodec(codec)
         ScrcpyAudioCodec.fromKey(codec).let { preferences.setAudioBitRate(it.defaultBitRate) }

@@ -43,6 +43,9 @@ class AppPreferences(context: Context) {
         const val DEBUG_ENABLED = false
         const val DEBUG_CALLER_NUMBER = ""
         val AUDIO_SOURCE = ScrcpyAudioSource.VOICE_CALL.cliKey
+        // VoIP (app) calls default to OUTPUT (remote submix) — the only scrcpy source that
+        // captured app-call audio before the Samsung screen-recorder backend existed.
+        val APPS_AUDIO_SOURCE = ScrcpyAudioSource.OUTPUT.cliKey
         val AUDIO_CODEC = ScrcpyAudioCodec.OPUS.cliKey
         val AUDIO_BITRATE = ScrcpyAudioCodec.OPUS.defaultBitRate
         const val FILE_NAME_TEMPLATE = "{date}_{direction}_{phone_number}"
@@ -98,6 +101,7 @@ class AppPreferences(context: Context) {
         DEBUG_ENABLED("debug_enabled"),
         DEBUG_CALLER_NUMBER("debug_caller_number"),
         AUDIO_SOURCE("audio_source"),
+        APPS_AUDIO_SOURCE("apps_audio_source"),
         AUDIO_CODEC("audio_codec"),
         AUDIO_BITRATE("audio_bitrate"),
         FILE_NAME_TEMPLATE("file_name_template"),
@@ -232,8 +236,38 @@ class AppPreferences(context: Context) {
     fun setDebugEnabled(enabled: Boolean) = setBoolean(Key.DEBUG_ENABLED, enabled)
     fun getDebugCallerNumber() = getString(Key.DEBUG_CALLER_NUMBER, DefaultsValue.DEBUG_CALLER_NUMBER) ?: DefaultsValue.DEBUG_CALLER_NUMBER
     fun setDebugCallerNumber(number: String) = setString(Key.DEBUG_CALLER_NUMBER, number)
-    fun getAudioSource() = getString(Key.AUDIO_SOURCE, DefaultsValue.AUDIO_SOURCE) ?: DefaultsValue.AUDIO_SOURCE
+    /**
+     * The audio source for regular phone (telephony) calls.
+     * Migration: builds from when this was a single shared dropdown may have stored the
+     * "samsung-screen-recorder" key here — that backend only applies to app calls, so the
+     * phone source is sanitized back to the [ScrcpyAudioSource.VOICE_CALL] default on read.
+     */
+    fun getAudioSource(): String {
+        val stored = getString(Key.AUDIO_SOURCE, DefaultsValue.AUDIO_SOURCE) ?: DefaultsValue.AUDIO_SOURCE
+        val isScreenRecorderKey = runCatching { ScrcpyAudioSource.fromKey(stored).isScreenRecorderBackend }.getOrDefault(false)
+        return if (isScreenRecorderKey) DefaultsValue.AUDIO_SOURCE else stored
+    }
     fun setAudioSource(source: String) = setString(Key.AUDIO_SOURCE, source)
+
+    /**
+     * The audio source for app (VoIP) calls — WhatsApp/Telegram etc. Only entries flagged
+     * [ScrcpyAudioSource.isAppsAudioSource] are offered (OUTPUT, SAMSUNG_SCREEN_RECORDER).
+     * Migration: builds from when this was a single shared dropdown stored the apps source in
+     * [Key.AUDIO_SOURCE]; honor that value when it is apps-capable and no dedicated key exists yet.
+     */
+    fun getAppsAudioSource(): String {
+        val stored = getString(Key.APPS_AUDIO_SOURCE, null)
+        if (stored != null) {
+            val isAppsSource = runCatching { ScrcpyAudioSource.fromKey(stored).isAppsAudioSource }.getOrDefault(false)
+            return if (isAppsSource) stored else DefaultsValue.APPS_AUDIO_SOURCE
+        }
+        val legacy = getString(Key.AUDIO_SOURCE, null)
+        if (legacy != null && runCatching { ScrcpyAudioSource.fromKey(legacy).isAppsAudioSource }.getOrDefault(false)) {
+            return legacy
+        }
+        return DefaultsValue.APPS_AUDIO_SOURCE
+    }
+    fun setAppsAudioSource(source: String) = setString(Key.APPS_AUDIO_SOURCE, source)
     fun getAudioCodec() = getString(Key.AUDIO_CODEC, DefaultsValue.AUDIO_CODEC) ?: DefaultsValue.AUDIO_CODEC
     fun setAudioCodec(codec: String) = setString(Key.AUDIO_CODEC, codec)
     fun getAudioBitRate() = getInt(Key.AUDIO_BITRATE, DefaultsValue.AUDIO_BITRATE)

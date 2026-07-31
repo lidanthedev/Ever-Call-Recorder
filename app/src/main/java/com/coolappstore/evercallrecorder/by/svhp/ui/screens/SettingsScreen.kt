@@ -1285,17 +1285,26 @@ private fun AutoDeleteSection(preferences: AppPreferences, updateTrigger: Int, a
 private fun AudioSection(preferences: AppPreferences, updateTrigger: Int, actions: SettingsActions) {
     val isDebugEnabled = remember(updateTrigger) { preferences.isDebugEnabled() }
     val audioSource    = remember(updateTrigger) { preferences.getAudioSource() }
+    val appsAudioSource = remember(updateTrigger) { preferences.getAppsAudioSource() }
     val audioCodec     = remember(updateTrigger) { preferences.getAudioCodec() }
     val savedBitRate   = remember(updateTrigger) { preferences.getAudioBitRate() }
     SettingsSection(title = stringResource(R.string.settings_section_audio), icon = Icons.Outlined.Equalizer) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             val currentSdk = Build.VERSION.SDK_INT
-            val audioSourceOptions = ScrcpyAudioSource.entries.filter { !it.isDebugOnly || isDebugEnabled }.map { source ->
+            // Phone (telephony) calls: all scrcpy sources; screen-recorder backends never apply here.
+            val audioSourceOptions = ScrcpyAudioSource.entries.filter { !it.isScreenRecorderBackend && (!it.isDebugOnly || isDebugEnabled) }.map { source ->
                 OptionItem(key = source.cliKey, label = stringResource(source.titleResId), description = stringResource(source.descriptionResId), enabled = currentSdk >= source.minApi && (source.maxApi == null || currentSdk <= source.maxApi))
             }
             val selectedAudio = audioSourceOptions.find { it.key == audioSource } ?: audioSourceOptions.first()
             M3DropdownField(label = stringResource(R.string.settings_audio_source), selected = selectedAudio, options = audioSourceOptions, onOptionSelected = { actions.setAudioSource(it.key) })
             selectedAudio.description?.let { desc -> Text(text = desc, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)) }
+            // Apps (VoIP) calls: only sources that can capture app-call audio (OUTPUT, Samsung Screen Recorder).
+            val appsSourceOptions = ScrcpyAudioSource.entries.filter { it.isAppsAudioSource }.map { source ->
+                OptionItem(key = source.cliKey, label = stringResource(source.titleResId), description = stringResource(source.descriptionResId), enabled = currentSdk >= source.minApi && (source.maxApi == null || currentSdk <= source.maxApi))
+            }
+            val selectedAppsAudio = appsSourceOptions.find { it.key == appsAudioSource } ?: appsSourceOptions.first()
+            M3DropdownField(label = stringResource(R.string.settings_apps_audio_source), selected = selectedAppsAudio, options = appsSourceOptions, onOptionSelected = { actions.setAppsAudioSource(it.key) })
+            selectedAppsAudio.description?.let { desc -> Text(text = desc, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)) }
             val codecOptions = ScrcpyAudioCodec.entries.map { OptionItem(it.cliKey, stringResource(it.titleResId)) }
             M3DropdownField(label = stringResource(R.string.settings_audio_codec), selected = codecOptions.find { it.key == audioCodec } ?: codecOptions.first(), options = codecOptions, onOptionSelected = { actions.setAudioCodec(it.key) })
             if (!LocalInspectionMode.current && audioCodec != ScrcpyAudioCodec.AAC.cliKey) {
@@ -1471,6 +1480,7 @@ private fun SettingsScreenPreview() {
             override fun setIgnoreContactsModeIncoming(modeEnum: AppPreferences.IgnoreContactsMode) {}
             override fun setIgnoreContactsModeOutgoing(modeEnum: AppPreferences.IgnoreContactsMode) {}
             override fun setAudioSource(source: String) {}
+            override fun setAppsAudioSource(source: String) {}
             override fun setAudioCodec(codec: String) {}
             override fun setAudioBitRate(bitRate: Int) {}
             override fun setThemeMode(mode: AppPreferences.ThemeMode) {}

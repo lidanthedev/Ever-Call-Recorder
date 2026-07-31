@@ -139,37 +139,30 @@ class AudioRecordingEngine {
         val bitRate = preferences.getAudioBitRate().takeIf { it > 0 } ?: codecEnum.defaultBitRate
 
         // Calls placed through messaging apps (WhatsApp/Telegram) are VoIP, not telephony: there is no
-        // modem-level VOICE_CALL tap for them. We force OUTPUT (REMOTE_SUBMIX) instead, regardless of the
-        // user's normal phone-call audio source preference. Both PLAYBACK and MIC-family sources were tried
-        // and produced silent recordings: PLAYBACK (AudioPlaybackCaptureConfiguration) hard-excludes audio
-        // tagged AudioAttributes.USAGE_VOICE_COMMUNICATION — exactly how these apps tag call audio — at the
-        // platform level, regardless of caller privilege; and any MIC-class source competes with the app's
-        // own concurrent microphone session for the call, which Android silences for privacy. OUTPUT avoids
-        // both problems: it's a privileged, CAPTURE_AUDIO_OUTPUT-gated system mix tap (the same permission
-        // class as VOICE_CALL, which already works reliably for normal calls), not a microphone capture, and
-        // it predates the USAGE_VOICE_COMMUNICATION exclusion that was only added for the newer Playback
-        // Capture API. See "Record calls from apps" in Settings.
-        val configuredSource = ScrcpyAudioSource.fromKey(preferences.getAudioSource())
-
-        // ── Samsung Screen Recorder backend ─────────────────────────────────────────────
-        // Not a scrcpy source at all: the system screen recorder captures the call and we import
-        // its audio track at stop time (see ScreenRecordingSession). Only valid for app (VoIP)
-        // calls; telephony calls fall back to VOICE_CALL below.
-        if (configuredSource.isScreenRecorderBackend && metadata.sourceApp != null) {
-            startScreenRecorderPipeline(context, service, metadata)
-            return
-        }
-
-        val audioSourceEnum = when {
-            metadata.sourceApp != null -> {
-                AppLogger.i(TAG, "Session originates from app '${metadata.sourceApp}' — forcing OUTPUT audio source instead of the configured '${preferences.getAudioSource()}'")
-                ScrcpyAudioSource.OUTPUT
+        // modem-level VOICE_CALL tap for them, so they use the separate "Apps audio source" setting.
+        // Its default, OUTPUT (REMOTE_SUBMIX), was chosen because both PLAYBACK and MIC-family sources
+        // produced silent recordings: PLAYBACK (AudioPlaybackCaptureConfiguration) hard-excludes audio
+        // tagged AudioAttributes.USAGE_VOICE_COMMUNICATION — exactly how these apps tag call audio — at
+        // the platform level, regardless of caller privilege; and any MIC-class source competes with the
+        // app's own concurrent microphone session for the call, which Android silences for privacy.
+        // OUTPUT avoids both problems: it's a privileged, CAPTURE_AUDIO_OUTPUT-gated system mix tap (the
+        // same permission class as VOICE_CALL, which already works reliably for normal calls), not a
+        // microphone capture, and it predates the USAGE_VOICE_COMMUNICATION exclusion that was only
+        // added for the newer Playback Capture API. The alternative "Samsung Screen Recorder" apps
+        // source is NOT a scrcpy source at all: the system screen recorder captures the call and we
+        // import its audio track at stop time (see ScreenRecordingSession).
+        // See "Record calls from apps" in Settings.
+        val audioSourceEnum = if (metadata.sourceApp != null) {
+            val appsSource = ScrcpyAudioSource.fromKey(preferences.getAppsAudioSource())
+            if (appsSource.isScreenRecorderBackend) {
+                startScreenRecorderPipeline(context, service, metadata)
+                return
             }
-            configuredSource.isScreenRecorderBackend -> {
-                AppLogger.w(TAG, "Samsung Screen Recorder source only applies to app (VoIP) calls — falling back to VOICE_CALL for this telephony call")
-                ScrcpyAudioSource.VOICE_CALL
-            }
-            else -> configuredSource
+            AppLogger.i(TAG, "Session originates from app '${metadata.sourceApp}' — using apps audio source '${appsSource.cliKey}'")
+            appsSource
+        } else {
+            // getAudioSource() is already sanitized: it can never return a screen-recorder backend.
+            ScrcpyAudioSource.fromKey(preferences.getAudioSource())
         }
 
         AppLogger.i(TAG, "Starting recording pipeline: source=${audioSourceEnum.cliKey} codec=${codecEnum.cliKey} bitrate=$bitRate")

@@ -38,6 +38,9 @@ import com.coolappstore.evercallrecorder.by.svhp.R
  *                           Samsung system screen recorder backend (see docs/SHIZUKU_SYSTEM_RECORD.md).
  *                           Such entries must never be passed to scrcpy-server; the recording engine
  *                           branches to a completely different pipeline before building server args.
+ * @property isAppsAudioSource `true` if this entry may be selected as the "Apps audio source"
+ *                           (VoIP calls from WhatsApp/Telegram etc.). Phone (telephony) calls use a
+ *                           separate setting that never includes screen-recorder backends.
  */
 enum class ScrcpyAudioSource(
     val cliKey: String,
@@ -46,7 +49,8 @@ enum class ScrcpyAudioSource(
     val minApi: Int,
     val maxApi: Int?,
     val isDebugOnly: Boolean,
-    val isScreenRecorderBackend: Boolean = false
+    val isScreenRecorderBackend: Boolean = false,
+    val isAppsAudioSource: Boolean = false
 ) {
 
     /**
@@ -118,7 +122,8 @@ enum class ScrcpyAudioSource(
         descriptionResId  = R.string.audio_source_output_description,
         minApi            = 19,
         maxApi            = null,
-        isDebugOnly       = true
+        isDebugOnly       = true,
+        isAppsAudioSource = true
     ),
 
 
@@ -219,7 +224,8 @@ enum class ScrcpyAudioSource(
         minApi            = 30,
         maxApi            = null,
         isDebugOnly       = false,
-        isScreenRecorderBackend = true
+        isScreenRecorderBackend = true,
+        isAppsAudioSource = true
     );
 
     companion object {

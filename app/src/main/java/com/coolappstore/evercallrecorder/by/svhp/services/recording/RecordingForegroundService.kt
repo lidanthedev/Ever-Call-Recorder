@@ -193,15 +193,15 @@ class RecordingForegroundService : Service() {
                     // VoIP-over-telephony priority switch: on devices where app calls (e.g. WhatsApp)
                     // also fire PHONE_STATE broadcasts, the telephony path usually wins the race by a
                     // few hundred ms and starts a scrcpy session with sourceApp=null metadata. When the
-                    // "Samsung Screen Recorder" source is selected, a later VoIP start intent (which
-                    // carries sourceApp) must REPLACE that session — otherwise the screen recorder
-                    // never starts. The partial telephony recording is discarded (cancel deletes it).
+                    // "Samsung Screen Recorder" apps source is selected, a later VoIP start intent
+                    // (which carries sourceApp) must REPLACE that session — otherwise the screen
+                    // recorder never starts. The partial telephony recording is discarded (cancel deletes it).
                     val activeMeta = currentState.metadata
                     val shouldSwitchToVoipBackend = activeMeta?.sourceApp == null &&
                         currentMeta?.sourceApp != null &&
                         runCatching {
                             com.coolappstore.evercallrecorder.by.svhp.integrations.scrcpy.ScrcpyAudioSource
-                                .fromKey(appPreferences.getAudioSource()).isScreenRecorderBackend
+                                .fromKey(appPreferences.getAppsAudioSource()).isScreenRecorderBackend
                         }.getOrDefault(false)
 
                     if (!shouldSwitchToVoipBackend) {

@@ -32,13 +32,15 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * **What gets recorded?** Once a call is detected, this service forwards to [RecordingForegroundService]
  * exactly like a normal call would, except the resulting [RecordingMetadata.sourceApp] is set. That flag makes
- * [com.coolappstore.evercallrecorder.by.svhp.services.recording.AudioRecordingEngine] capture with
- * [com.coolappstore.evercallrecorder.by.svhp.integrations.scrcpy.ScrcpyAudioSource.OUTPUT] instead of the
- * telephony-only VOICE_CALL source, relayed through the same privileged Shizuku/scrcpy-server pipeline. PLAYBACK
- * and MIC-class sources were tried first and both produced silent recordings: PLAYBACK hard-excludes audio
- * tagged `USAGE_VOICE_COMMUNICATION` (how these apps tag call audio); MIC-class sources compete with the app's
- * own concurrent microphone session and get silenced by Android's privacy protections. OUTPUT is a privileged,
- * CAPTURE_AUDIO_OUTPUT-gated system mix tap — the same permission class as VOICE_CALL — so it hits neither limit.
+ * [com.coolappstore.evercallrecorder.by.svhp.services.recording.AudioRecordingEngine] use the separate
+ * "Apps audio source" setting instead of the telephony one: either
+ * [com.coolappstore.evercallrecorder.by.svhp.integrations.scrcpy.ScrcpyAudioSource.OUTPUT] (remote submix
+ * through the same privileged Shizuku/scrcpy-server pipeline) or the Samsung screen-recorder backend.
+ * OUTPUT is the default because PLAYBACK and MIC-class sources produce silent recordings: PLAYBACK
+ * hard-excludes audio tagged `USAGE_VOICE_COMMUNICATION` (how these apps tag call audio); MIC-class
+ * sources compete with the app's own concurrent microphone session and get silenced by Android's
+ * privacy protections. OUTPUT is a privileged, CAPTURE_AUDIO_OUTPUT-gated system mix tap — the same
+ * permission class as VOICE_CALL — so it hits neither limit.
  *
  * **Requires the user to grant "Notification access"** to this app (Settings ➜ Notification access), the same
  * system permission any notification-reading app needs. See "Record calls from apps" in Settings, which links
