@@ -6,11 +6,20 @@
 shell-side methods in `services/ShellService.kt`, and the `SAMSUNG_SCREEN_RECORDER` entry in
 `integrations/scrcpy/ScrcpyAudioSource`. Dialog confirmation uses **option B** below
 (uiautomator-dump, matched by resource-id `android:id/button1` for locale-safety, text as
-fallback) — done entirely in the shell process: wait for the dialog window focus via
-`dumpsys window`, one `uiautomator dump`, parse the button's `bounds` from its node tag,
-`input tap` the center. Option A (AccessibilityService) was tried first and removed — the
-service connected on-device but the dialog never got clicked. The rest of this doc is the
-original ADB-verified investigation and remains the ground-truth reference.
+fallback) — done entirely in the shell process as a dump-and-tap loop (no separate focus
+poll). Option A (AccessibilityService) was tried first and removed — the service connected
+on-device but the dialog never got clicked.
+
+Speed findings (verified on-device, 2026-07-31):
+- **The 3-second pre-recording countdown can be skipped by tapping the screen** (any spot;
+  we tap upper-center, clear of the underlying app's in-call buttons). Measured:
+  ~1.4 s tap→projection vs ~3.7 s baseline.
+- The tile-presence check (`settings get sysui_qs_tiles`) is cached per shell process.
+- Import must ignore hidden `.pending-*.mp4` files (finalize race) and the stop path must
+  survive duplicate stop requests (see `releaseInFlight` in `RecordingForegroundService`).
+
+The rest of this doc is the original ADB-verified investigation and remains the
+ground-truth reference.
 
 ## Goal
 

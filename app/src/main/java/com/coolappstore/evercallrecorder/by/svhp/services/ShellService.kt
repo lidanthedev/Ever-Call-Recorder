@@ -102,7 +102,7 @@ class ShellService : IShellService.Stub {
         const val SCREEN_RECORD_STATE_TIMEOUT_MS = 15_000L
 
         /** Poll interval while waiting for the media projection state to change. */
-        const val SCREEN_RECORD_STATE_POLL_MS = 500L
+        const val SCREEN_RECORD_STATE_POLL_MS = 250L
 
         /** Max time to wait for the recorder confirmation dialog to gain window focus after the tile click. */
         const val SCREEN_RECORD_DIALOG_TIMEOUT_MS = 6_000L
@@ -406,8 +406,12 @@ class ShellService : IShellService.Stub {
     /**
      * Ensures the Screen recorder tile is present in the Quick Settings layout.
      * `cmd statusbar click-tile` silently no-ops when the user removed the tile.
+     * Checked only once per shell-process lifetime to keep session starts fast.
      */
+    private var recorderTileEnsured = false
+
     private fun ensureRecorderTilePresent() {
+        if (recorderTileEnsured) return
         val spec = "custom($SAMSUNG_RECORDER_TILE)"
         val current = execShellCommand("settings get secure sysui_qs_tiles")?.trim().orEmpty()
         if (spec !in current) {
@@ -415,65 +419,92 @@ class ShellService : IShellService.Stub {
             execShellCommand("settings put secure sysui_qs_tiles \"$current,$spec\"")
             Thread.sleep(1000)
         }
+        recorderTileEnsured = true
     }
 
     /**
-     * Waits for Samsung's recorder confirmation dialog to gain window focus after the tile
-     * click. Cheap poll on `dumpsys window` (same check as docs/record.sh), no uiautomator.
+     * Waits for Samsung's recorder confirmation dialog and taps its positive button.
      *
-     * @return true if a focused window owned by smartcapture was seen within the timeout.
-     */
-    private fun waitForRecorderDialog(): Boolean {
-        val deadline = System.currentTimeMillis() + SCREEN_RECORD_DIALOG_TIMEOUT_MS
-        while (System.currentTimeMillis() < deadline) {
-            val dump = execShellCommand("dumpsys window")
-            if (dump != null && dump.contains("mCurrentFocus") && dump.contains(SAMSUNG_CAPTURE_PACKAGE)) {
-                return true
-            }
-            Thread.sleep(SCREEN_RECORD_DIALOG_POLL_MS)
-        }
-        return false
-    }
-
-    /**
-     * Confirms Samsung's "Start recording" dialog by tapping its positive button, located via
-     * a single `uiautomator dump`. Matches the button by resource-id first (locale-safe), with
-     * the (localized) text as a fallback.
+     * Instead of a separate `dumpsys window` focus poll followed by a single dump (record.sh
+     * style), this loops `uiautomator dump` directly: on the fast path the dialog is already in
+     * the first dump (~0.5–1 s saved per start). Matches the button by resource-id first
+     * (locale-safe), with the (localized) text as a fallback.
      *
      * Bounds-parsing pitfall (docs/SHIZUKU_SYSTEM_RECORD.md): numbers must be extracted ONLY
      * from the `bounds="[x1,y1][x2,y2]"` attribute of the SAME node tag that carries the id —
      * a naive `[0-9]+` over the whole document picks up the stray `1` from `android:id/button1`
      * and offsets the tap.
      *
-     * @return true if the button was found and tapped.
+     * @return true if the button appeared and was tapped within the timeout.
      */
-    private fun confirmRecorderDialog(): Boolean {
-        execShellCommand("uiautomator dump $UI_DUMP_PATH")
-        val xml = execShellCommand("cat $UI_DUMP_PATH")
-        if (xml == null) {
-            AppLogger.w(TAG, "Failed to read the UI dump from $UI_DUMP_PATH")
-            return false
+    private fun confirmRecorderDialogWhenItAppears(): Boolean {
+        val deadline = System.currentTimeMillis() + SCREEN_RECORD_DIALOG_TIMEOUT_MS
+        while (System.currentTimeMillis() < deadline) {
+            execShellCommand("uiautomator dump $UI_DUMP_PATH")
+            val xml = execShellCommand("cat $UI_DUMP_PATH")
+            if (xml != null) {
+                val nodeTags = Regex("<node[^>]*>").findAll(xml).map { it.value }
+                val buttonTag = nodeTags.firstOrNull { it.contains("resource-id=\"$DIALOG_BUTTON_RESOURCE_ID\"") }
+                    ?: nodeTags.firstOrNull { it.contains("text=\"$DIALOG_BUTTON_FALLBACK_TEXT\"") }
+                if (buttonTag != null) {
+                    val bounds = Regex("bounds=\"\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]\"").find(buttonTag)
+                    if (bounds == null) {
+                        AppLogger.w(TAG, "No bounds attribute on the recorder dialog button node")
+                        return false
+                    }
+                    val (x1, y1, x2, y2) = bounds.destructured
+                    val cx = (x1.toInt() + x2.toInt()) / 2
+                    val cy = (y1.toInt() + y2.toInt()) / 2
+                    AppLogger.i(TAG, "Tapping recorder dialog positive button at ($cx, $cy)")
+                    execShellCommand("input tap $cx $cy")
+                    return true
+                }
+            }
+            Thread.sleep(SCREEN_RECORD_DIALOG_POLL_MS)
         }
+        AppLogger.w(TAG, "Recorder dialog positive button never appeared (device locked?)")
+        return false
+    }
 
-        val nodeTags = Regex("<node[^>]*>").findAll(xml).map { it.value }
-        val buttonTag = nodeTags.firstOrNull { it.contains("resource-id=\"$DIALOG_BUTTON_RESOURCE_ID\"") }
-            ?: nodeTags.firstOrNull { it.contains("text=\"$DIALOG_BUTTON_FALLBACK_TEXT\"") }
-        if (buttonTag == null) {
-            AppLogger.w(TAG, "Recorder dialog positive button not found in UI dump")
-            return false
-        }
+    /**
+     * Screen resolution as "WxH" parsed from `wm size`, cached per process. Used to tap the
+     * upper-center of the screen to skip Samsung's 3-second pre-recording countdown (verified
+     * on One UI 8 / Android 16: a tap during the countdown starts the session immediately,
+     * ~2.3 s saved).
+     */
+    private var cachedScreenCenter: Pair<Int, Int>? = null
 
-        val bounds = Regex("bounds=\"\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]\"").find(buttonTag)
-        if (bounds == null) {
-            AppLogger.w(TAG, "No bounds attribute on the recorder dialog button node")
-            return false
+    private fun getCountdownSkipTapPoint(): Pair<Int, Int> {
+        cachedScreenCenter?.let { return it }
+        val size = execShellCommand("wm size")?.trim().orEmpty()
+        val match = Regex("(\\d+)x(\\d+)").find(size)
+        val point = if (match != null) {
+            val (w, h) = match.destructured
+            // Screen center: verified on-device that only center taps skip the countdown
+            // (upper-third taps were ignored by the overlay). Center of an in-call screen is
+            // the contact/avatar area, so a stray pass-through tap is harmless there.
+            Pair(w.toInt() / 2, h.toInt() / 2)
+        } else {
+            Pair(720, 1560) // Center fallback for 1440x3120-class devices.
         }
-        val (x1, y1, x2, y2) = bounds.destructured
-        val cx = (x1.toInt() + x2.toInt()) / 2
-        val cy = (y1.toInt() + y2.toInt()) / 2
-        AppLogger.i(TAG, "Tapping recorder dialog positive button at ($cx, $cy)")
-        execShellCommand("input tap $cx $cy")
-        return true
+        cachedScreenCenter = point
+        return point
+    }
+
+    /**
+     * Sends taps that skip Samsung's ~3 s pre-recording countdown (verified on-device:
+     * ~1.4 s vs ~3.7 s to projection-active). Multiple spaced taps because the overlay's
+     * appearance time varies — a single tap can land before it is touchable. Best-effort:
+     * if all taps miss, the countdown simply runs its course and the projection poll below
+     * still catches the session start.
+     */
+    private fun skipRecorderCountdown() {
+        val (x, y) = getCountdownSkipTapPoint()
+        repeat(3) { attempt ->
+            Thread.sleep(350)
+            AppLogger.d(TAG, "Tapping ($x, $y) to skip the recorder countdown (attempt ${attempt + 1})")
+            execShellCommand("input tap $x $y")
+        }
     }
 
     /**
@@ -501,15 +532,12 @@ class ShellService : IShellService.Stub {
         AppLogger.i(TAG, "Clicking screen recorder tile")
         execShellCommand("cmd statusbar click-tile $SAMSUNG_RECORDER_TILE")
 
-        if (!waitForRecorderDialog()) {
-            AppLogger.w(TAG, "Recorder confirmation dialog never appeared (device locked?)")
-            return false
-        }
-
-        if (!confirmRecorderDialog()) {
+        if (!confirmRecorderDialogWhenItAppears()) {
             AppLogger.w(TAG, "Failed to confirm the recorder dialog")
             return false
         }
+
+        skipRecorderCountdown()
 
         val deadline = System.currentTimeMillis() + SCREEN_RECORD_STATE_TIMEOUT_MS
         while (System.currentTimeMillis() < deadline) {
