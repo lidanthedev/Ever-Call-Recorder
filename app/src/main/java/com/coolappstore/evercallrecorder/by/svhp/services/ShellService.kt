@@ -118,6 +118,9 @@ class ShellService : IShellService.Stub {
 
         /** Fallback text of the dialog's positive button (localized — used only if the id is absent). */
         const val DIALOG_BUTTON_FALLBACK_TEXT = "Start recording"
+
+        /** Resource id of the "Media and mic" audio option (clickable container) in the recorder dialog. */
+        const val DIALOG_AUDIO_MEDIA_AND_MIC_ID = "radio_button_sound_all"
     }
 
     /**
@@ -444,6 +447,27 @@ class ShellService : IShellService.Stub {
             val xml = execShellCommand("cat $UI_DUMP_PATH")
             if (xml != null) {
                 val nodeTags = Regex("<node[^>]*>").findAll(xml).map { it.value }
+
+                // The "Media and mic" audio option must be selected, otherwise the recording is
+                // silent on one or both sides. The checked state lives on the child RadioButton
+                // (the node right after the option's container in document order); the container
+                // is the clickable one. If it is not selected, tap it and re-verify on the next
+                // loop iteration before tapping Start.
+                val audioTag = nodeTags.firstOrNull { it.contains("resource-id=\"$SAMSUNG_CAPTURE_PACKAGE:id/$DIALOG_AUDIO_MEDIA_AND_MIC_ID\"") }
+                if (audioTag != null && !isMediaAndMicSelected(xml)) {
+                    val bounds = Regex("bounds=\"\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]\"").find(audioTag)
+                    if (bounds != null) {
+                        val (x1, y1, x2, y2) = bounds.destructured
+                        val cx = (x1.toInt() + x2.toInt()) / 2
+                        val cy = (y1.toInt() + y2.toInt()) / 2
+                        AppLogger.i(TAG, "'Media and mic' not selected, tapping it at ($cx, $cy)")
+                        execShellCommand("input tap $cx $cy")
+                        Thread.sleep(SCREEN_RECORD_DIALOG_POLL_MS)
+                        continue
+                    }
+                    AppLogger.w(TAG, "Could not locate 'Media and mic' option bounds, proceeding with current audio setting")
+                }
+
                 val buttonTag = nodeTags.firstOrNull { it.contains("resource-id=\"$DIALOG_BUTTON_RESOURCE_ID\"") }
                     ?: nodeTags.firstOrNull { it.contains("text=\"$DIALOG_BUTTON_FALLBACK_TEXT\"") }
                 if (buttonTag != null) {
@@ -464,6 +488,20 @@ class ShellService : IShellService.Stub {
         }
         AppLogger.w(TAG, "Recorder dialog positive button never appeared (device locked?)")
         return false
+    }
+
+    /**
+     * True when the recorder dialog's "Media and mic" option is currently selected.
+     * The option container ($DIALOG_AUDIO_MEDIA_AND_MIC_ID) is not itself checkable; the state
+     * is on the child `android.widget.RadioButton` node that follows it in document order.
+     * Defaults to true when the structure is not recognized so we never block the recording.
+     */
+    private fun isMediaAndMicSelected(xml: String): Boolean {
+        val idPos = xml.indexOf(DIALOG_AUDIO_MEDIA_AND_MIC_ID)
+        if (idPos < 0) return true
+        val after = xml.substring(idPos)
+        val radioTag = Regex("<node[^>]*RadioButton[^>]*>").find(after)?.value ?: return true
+        return radioTag.contains("checked=\"true\"")
     }
 
     /**
