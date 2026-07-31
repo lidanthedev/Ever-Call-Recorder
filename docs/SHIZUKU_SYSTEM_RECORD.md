@@ -6,11 +6,24 @@
 orchestrator), `services/screenrecorder/SamsungScreenRecorderDriver.kt` (shell-side automation,
 behind the vendor-agnostic `ScreenRecorderDriver` contract + `ScreenRecorderDrivers` registry;
 `IShellService` methods only delegate by `backendKey`), and the `SAMSUNG_SCREEN_RECORDER`
-entry in `integrations/scrcpy/ScrcpyAudioSource`. Dialog confirmation uses **option B** below
-(uiautomator-dump, matched by resource-id `android:id/button1` for locale-safety, text as
-fallback) — done entirely in the shell process as a dump-and-tap loop (no separate focus
-poll). Option A (AccessibilityService) was tried first and removed — the service connected
-on-device but the dialog never got clicked.
+entry in `integrations/scrcpy/ScrcpyAudioSource`. Dialog confirmation is user-selectable
+(`AppPreferences.ScreenRecorderConfirmMode`, Settings → Recording):
+
+- **uiautomator (default)** — **option B** below, done entirely in the shell process as a
+  dump-and-tap loop (matched by resource-id `android:id/button1` for locale-safety, text as
+  fallback; no separate focus poll). Costs ~2–5 s per dump.
+- **accessibility** — app-side `ScreenRecorderAccessibilityService` clicks the dialog in-memory
+  (~ms). The countdown is skipped from BOTH sides: the service's own `dispatchGesture` center
+  taps after its click, and blind shell-side `input tap`s fired in a loop (every 250 ms,
+  starting 0.5 s after the tile click) until the projection appears — the loop survives late
+  countdown overlays. Requires the user to enable the service in system Accessibility settings;
+  `ScreenRecordingSession` falls back to uiautomator when it isn't enabled. The service
+  self-gates on the confirmation-mode preference: without that gate, both mechanisms race the
+  dialog — the service dismisses it instantly, the shell dump never sees the button and
+  reports a false start failure while the recorder runs.
+  NOTE: an earlier accessibility attempt was removed because the dialog never got clicked —
+  likely because a system alert dialog is not necessarily the *active* window. The new
+  implementation queries both `rootInActiveWindow` AND `event.source` for that reason.
 
 Speed findings (verified on-device, 2026-07-31):
 - **The 3-second pre-recording countdown can be skipped by tapping the screen** (any spot;

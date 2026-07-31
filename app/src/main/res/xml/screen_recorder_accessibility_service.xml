@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ~ ShizuCallRecorder: FOSS Call recording powered through ADB/Shizuku!
+  ~  Copyright (C) 2026-present kitsumed (Med)
+  ~  This software is licensed under the GNU General Public License v3 or later, with additional terms as permitted under Section 7.
+  ~  The full license text is available in the LICENSE file at the root of this project.
+  ~  This software is distributed WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+  -->
+
+<!--
+     Accessibility config for ScreenRecorderAccessibilityService.
+     Restricted via packageNames to Samsung's Smart Capture package only: the service never
+     sees any other app's windows. canRetrieveWindowContent is required to read the recorder
+     dialog's node tree (button ids / checked states).
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:canRetrieveWindowContent="true"
+    android:canPerformGestures="true"
+    android:notificationTimeout="50"
+    android:packageNames="com.samsung.android.app.smartcapture"
+    android:description="@string/screen_recorder_a11y_service_description" />

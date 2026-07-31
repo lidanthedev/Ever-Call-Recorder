@@ -336,12 +336,12 @@ class ShellService : IShellService.Stub {
     // services/screenrecorder/. These AIDL methods only resolve the driver for the given
     // backendKey and delegate.
 
-    override fun startScreenRecording(backendKey: String): Boolean {
+    override fun startScreenRecording(backendKey: String, confirmMode: Int): Boolean {
         val driver = ScreenRecorderDrivers.forKey(backendKey) ?: run {
             AppLogger.w(TAG, "startScreenRecording: unknown screen recorder backend '$backendKey'")
             return false
         }
-        return driver.startRecording()
+        return driver.startRecording(confirmMode)
     }
 
     override fun stopScreenRecording(backendKey: String): Boolean {

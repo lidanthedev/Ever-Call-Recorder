@@ -14,9 +14,15 @@ import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.coolappstore.evercallrecorder.by.svhp.BuildConfig
+import com.coolappstore.evercallrecorder.by.svhp.R
 import com.coolappstore.evercallrecorder.by.svhp.services.call.CallSessionManager
 import com.coolappstore.evercallrecorder.by.svhp.data.AppPreferences
+import com.coolappstore.evercallrecorder.by.svhp.data.recordings.RecordingDirection
+import com.coolappstore.evercallrecorder.by.svhp.data.recordings.RecordingMetadata
 import com.coolappstore.evercallrecorder.by.svhp.integrations.scrcpy.ScrcpyAudioCodec
+import com.coolappstore.evercallrecorder.by.svhp.integrations.scrcpy.ScrcpyAudioSource
+import com.coolappstore.evercallrecorder.by.svhp.integrations.shizuku.ShizukuConnectionManager
+import com.coolappstore.evercallrecorder.by.svhp.services.recording.ScreenRecordingSession
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -47,6 +53,7 @@ interface SettingsActions {
     fun setDebugEnabled(enabled: Boolean)
     fun setDebugCallerNumber(number: String)
     fun triggerDebugAction(action: DebugAction)
+    fun triggerDebugScreenRecorderTest()
     fun exportLogs(uri: android.net.Uri)
     fun getAppVersion(): String
     fun setShizukuAutoManageEnabled(enabled: Boolean)
@@ -70,9 +77,20 @@ interface SettingsActions {
     fun setRecordCallsFromApp(target: com.coolappstore.evercallrecorder.by.svhp.services.call.AppCallTarget, enabled: Boolean)
     fun setRecordTelephonyCallsEnabled(enabled: Boolean)
     fun setDeleteScreenRecordingAfterImportEnabled(enabled: Boolean)
+    fun setScreenRecorderConfirmMode(mode: AppPreferences.ScreenRecorderConfirmMode)
 }
 
 class SettingsViewModel(application: Application) : AndroidViewModel(application), SettingsActions {
+
+    companion object {
+        private const val TAG = "SCR:SettingsViewModel"
+
+        /** Fixed contact label used for the debug screen-recorder self-test filename/metadata. */
+        private const val DEBUG_SCREEN_RECORDER_CONTACT_NAME = "Test"
+
+        /** How long the debug screen-recorder self-test records before stopping and importing. */
+        private const val DEBUG_SCREEN_RECORDER_DURATION_MS = 5_000L
+    }
 
     private val appContext = application.applicationContext
     val preferences = AppPreferences(appContext)
@@ -146,6 +164,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     }
     override fun setRecordTelephonyCallsEnabled(enabled: Boolean) { preferences.setRecordTelephonyCallsEnabled(enabled); refresh() }
     override fun setDeleteScreenRecordingAfterImportEnabled(enabled: Boolean) { preferences.setDeleteScreenRecordingAfterImportEnabled(enabled); refresh() }
+    override fun setScreenRecorderConfirmMode(mode: AppPreferences.ScreenRecorderConfirmMode) { preferences.setScreenRecorderConfirmMode(mode); refresh() }
     override fun setAppLanguage(languageCode: String) {
         val localeList = if (languageCode.isEmpty()) LocaleListCompat.getEmptyLocaleList()
                          else LocaleListCompat.forLanguageTags(languageCode)
@@ -171,6 +190,47 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                 DebugAction.OFFHOOK -> CallSessionManager.ACTION_DEBUG_OFFHOOK
             }
             CallSessionManager.getInstance(appContext).handleDebugAction(actionType)
+        }
+    }
+
+    /**
+     * Runs the full Samsung screen-recorder flow once as a self-test: binds the shell service,
+     * starts the system recorder (tile click + dialog confirmation), records for 5 seconds, then
+     * stops and imports the audio track into the configured storage. The call metadata uses the
+     * fixed contact label [DEBUG_SCREEN_RECORDER_CONTACT_NAME] so the output file is easy to spot.
+     */
+    override fun triggerDebugScreenRecorderTest() {
+        viewModelScope.launch {
+            val connectionManager = ShizukuConnectionManager(appContext)
+            try {
+                val metadata = RecordingMetadata(
+                    rawPhoneNumber = DEBUG_SCREEN_RECORDER_CONTACT_NAME,
+                    direction = RecordingDirection.INCOMING
+                )
+                val backendKey = ScrcpyAudioSource.SAMSUNG_SCREEN_RECORDER.screenRecorderBackendKey
+                    ?: throw IllegalStateException("SAMSUNG_SCREEN_RECORDER has no backend key")
+
+                android.widget.Toast.makeText(appContext, appContext.getString(R.string.settings_debug_screen_recorder_starting), android.widget.Toast.LENGTH_SHORT).show()
+
+                val shellService = connectionManager.getShellService()
+                val session = ScreenRecordingSession(appContext, shellService, metadata, backendKey)
+                session.start()
+                kotlinx.coroutines.delay(DEBUG_SCREEN_RECORDER_DURATION_MS)
+                val uri = session.stopAndImport()
+
+                if (uri != null) {
+                    AppLogger.i(TAG, "Debug screen recorder test succeeded, imported: $uri")
+                    android.widget.Toast.makeText(appContext, appContext.getString(R.string.settings_debug_screen_recorder_success, uri.lastPathSegment ?: uri.toString()), android.widget.Toast.LENGTH_LONG).show()
+                } else {
+                    AppLogger.e(TAG, "Debug screen recorder test failed: stopAndImport returned no file")
+                    android.widget.Toast.makeText(appContext, appContext.getString(R.string.settings_debug_screen_recorder_failed, "import returned no file"), android.widget.Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                AppLogger.e(TAG, "Debug screen recorder test failed", e)
+                android.widget.Toast.makeText(appContext, appContext.getString(R.string.settings_debug_screen_recorder_failed, e.message ?: e.javaClass.simpleName), android.widget.Toast.LENGTH_LONG).show()
+            } finally {
+                connectionManager.unbind()
+            }
         }
     }
     override fun exportLogs(uri: android.net.Uri) {

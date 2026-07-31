@@ -52,6 +52,9 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 import com.coolappstore.evercallrecorder.by.svhp.R
@@ -59,6 +62,7 @@ import com.coolappstore.evercallrecorder.by.svhp.data.AppPreferences
 import com.coolappstore.evercallrecorder.by.svhp.integrations.scrcpy.ScrcpyAudioCodec
 import com.coolappstore.evercallrecorder.by.svhp.integrations.scrcpy.ScrcpyAudioSource
 import com.coolappstore.evercallrecorder.by.svhp.integrations.scrcpy.ScrcpyConfig
+import com.coolappstore.evercallrecorder.by.svhp.services.screenrecorder.ScreenRecorderAccessibilityService
 import com.coolappstore.evercallrecorder.by.svhp.system.PersistentFolderPickerContract
 import com.coolappstore.evercallrecorder.by.svhp.system.copyToClipboard
 import com.coolappstore.evercallrecorder.by.svhp.system.openGithub
@@ -1027,6 +1031,40 @@ private fun RecordingSection(
             description = stringResource(R.string.settings_delete_screen_recording_after_import_desc)
         )
         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+        run {
+            // "Recorder dialog confirmation" — how the screen recorder's start dialog is confirmed.
+            // The accessibility-service enabled state is re-read on every ON_RESUME so returning
+            // from the system Accessibility settings screen updates the warning below.
+            val confirmMode = remember(updateTrigger) { preferences.getScreenRecorderConfirmMode() }
+            val lifecycleOwner = LocalLifecycleOwner.current
+            var a11yServiceEnabled by remember { mutableStateOf(ScreenRecorderAccessibilityService.isServiceEnabled(context)) }
+            DisposableEffect(lifecycleOwner) {
+                val observer = LifecycleEventObserver { _, event ->
+                    if (event == Lifecycle.Event.ON_RESUME) a11yServiceEnabled = ScreenRecorderAccessibilityService.isServiceEnabled(context)
+                }
+                lifecycleOwner.lifecycle.addObserver(observer)
+                onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+            }
+            val confirmModeOptions = listOf(
+                OptionItem(AppPreferences.ScreenRecorderConfirmMode.UIAUTOMATOR.key, stringResource(R.string.settings_screen_recorder_confirm_uiautomator), stringResource(R.string.settings_screen_recorder_confirm_uiautomator_desc)),
+                OptionItem(AppPreferences.ScreenRecorderConfirmMode.ACCESSIBILITY.key, stringResource(R.string.settings_screen_recorder_confirm_accessibility), stringResource(R.string.settings_screen_recorder_confirm_accessibility_desc))
+            )
+            val selectedConfirmMode = confirmModeOptions.find { it.key == confirmMode.key } ?: confirmModeOptions.first()
+            M3DropdownField(
+                label = stringResource(R.string.settings_screen_recorder_confirm_mode),
+                selected = selectedConfirmMode,
+                options = confirmModeOptions,
+                onOptionSelected = { actions.setScreenRecorderConfirmMode(AppPreferences.ScreenRecorderConfirmMode.fromKey(it.key)) }
+            )
+            selectedConfirmMode.description?.let { desc -> Text(text = desc, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)) }
+            if (confirmMode == AppPreferences.ScreenRecorderConfirmMode.ACCESSIBILITY && !a11yServiceEnabled) {
+                Text(text = stringResource(R.string.settings_screen_recorder_a11y_disabled_warning), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+                OutlinedButton(onClick = { ScreenRecorderAccessibilityService.openAccessibilitySettings(context) }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                    Text(stringResource(R.string.settings_screen_recorder_a11y_open_settings))
+                }
+            }
+        }
+        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
         SectionListItem(icon = storageIcon, headline = stringResource(R.string.settings_recording_folder_label), supporting = storageSupportingText, supportingColor = MaterialTheme.colorScheme.primary, onClick = onStorageClick)
         SectionListItem(icon = Icons.Outlined.DriveFileRenameOutline, headline = stringResource(R.string.settings_file_name_template), supporting = fileNameFormat, supportingColor = MaterialTheme.colorScheme.primary, onClick = { showFileNameFormatDialog = true })
     }
@@ -1471,6 +1509,8 @@ private fun DebugActionGrid(actions: SettingsActions) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
         items.forEach { (action, label) -> FilledTonalButton(onClick = { actions.triggerDebugAction(action) }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp)) { Text(label, style = MaterialTheme.typography.labelSmall) } }
     }
+    Spacer(modifier = Modifier.height(8.dp))
+    FilledTonalButton(onClick = { actions.triggerDebugScreenRecorderTest() }, modifier = Modifier.fillMaxWidth(), contentPadding = PaddingValues(horizontal = 4.dp)) { Text(stringResource(R.string.settings_debug_action_screen_recorder), style = MaterialTheme.typography.labelSmall) }
 }
 
 @Preview(showBackground = true)
@@ -1500,6 +1540,7 @@ private fun SettingsScreenPreview() {
             override fun setDebugEnabled(enabled: Boolean) {}
             override fun setDebugCallerNumber(number: String) {}
             override fun triggerDebugAction(action: DebugAction) {}
+            override fun triggerDebugScreenRecorderTest() {}
             override fun exportLogs(uri: Uri) {}
             override fun getAppVersion(): String = "Version 3.0.0 (Mock)"
             override fun setShizukuAutoManageEnabled(enabled: Boolean) {}
@@ -1523,6 +1564,7 @@ private fun SettingsScreenPreview() {
             override fun setRecordCallsFromApp(target: AppCallTarget, enabled: Boolean) {}
             override fun setRecordTelephonyCallsEnabled(enabled: Boolean) {}
             override fun setDeleteScreenRecordingAfterImportEnabled(enabled: Boolean) {}
+            override fun setScreenRecorderConfirmMode(mode: AppPreferences.ScreenRecorderConfirmMode) {}
         }
         SettingsContent(preferences = dummyPreferences, updateTrigger = 0, actions = dummyActions, contactPickerState = null, onStorageClick = {}, onOpenContactsIncoming = {}, onOpenContactsOutgoing = {}, onConfirmContacts = {}, onDismissContacts = {}, onExportLogs = {}, onBack = {})
     }

@@ -43,6 +43,30 @@ abstract class ScreenRecorderDriver {
 
         /** Poll interval while waiting for the media projection state to change. */
         const val STATE_POLL_MS = 250L
+
+        /**
+         * Dialog confirmation modes for [startRecording]. Mirrors
+         * [com.coolappstore.evercallrecorder.by.svhp.data.AppPreferences.ScreenRecorderConfirmMode]
+         * (int because AIDL has no enum support).
+         */
+
+        /** Shell-side `uiautomator dump` + `input tap` (driver's [confirmStart] hook). */
+        const val CONFIRM_UIAUTOMATOR = 0
+
+        /**
+         * App-side accessibility service clicks the dialog; the shell process skips [confirmStart]
+         * and only waits for the projection to become active ([waitForExternalConfirmation]).
+         * Countdown-skip taps ([afterStartConfirmed]) still fire, blindly, after a
+         * [EXTERNAL_CONFIRM_TAP_DELAY_MS] grace delay that lets the service confirm first.
+         */
+        const val CONFIRM_ACCESSIBILITY = 1
+
+        /**
+         * Grace delay after the start trigger before firing countdown-skip taps in
+         * [CONFIRM_ACCESSIBILITY] mode — gives the app-side accessibility service time to click
+         * the dialog first, so the taps land on the countdown overlay instead of the open dialog.
+         */
+        const val EXTERNAL_CONFIRM_TAP_DELAY_MS = 500L
     }
 
     /** Log tag; drivers override to identify themselves in logcat. */
@@ -77,6 +101,12 @@ abstract class ScreenRecorderDriver {
     /** Runs right after [confirmStart] succeeds (e.g. skip a pre-recording countdown). */
     open fun afterStartConfirmed() {}
 
+    /**
+     * Single countdown-skip attempt for the [CONFIRM_ACCESSIBILITY] tap loop, fired every
+     * [STATE_POLL_MS] until the projection appears. Default: no-op (recorders with no countdown).
+     */
+    protected open fun skipCountdownOnce() {}
+
     /** Fires the vendor's stop trigger (may be the same toggle as [requestStart]). */
     abstract fun requestStop()
 
@@ -96,9 +126,15 @@ abstract class ScreenRecorderDriver {
      * Safety: refuses to trigger when a session is already active (start/stop triggers usually
      * toggle — firing would STOP the user's own ongoing recording instead).
      *
+     * @param confirmMode [CONFIRM_UIAUTOMATOR] (default): the shell process drives [confirmStart]
+     * (uiautomator dump + input tap) then [afterStartConfirmed]. [CONFIRM_ACCESSIBILITY]: the
+     * app-side accessibility service confirms the dialog on its own, so this process skips
+     * [confirmStart]; after a [EXTERNAL_CONFIRM_TAP_DELAY_MS] grace delay it fires
+     * [skipCountdownOnce] in a loop until the projection appears (countdown skipped or elapsed)
+     * — no uiautomator dumps.
      * @return true if the session became active within [STATE_TIMEOUT_MS].
      */
-    fun startRecording(): Boolean {
+    fun startRecording(confirmMode: Int = CONFIRM_UIAUTOMATOR): Boolean {
         if (isRecordingActive()) {
             AppLogger.w(tag, "startRecording() refused: a screen recording is already active (triggers toggle, firing would stop it)")
             return false
@@ -112,12 +148,35 @@ abstract class ScreenRecorderDriver {
 
         requestStart()
 
-        if (!confirmStart()) {
+        val confirmed = if (confirmMode == CONFIRM_ACCESSIBILITY) {
+            AppLogger.i(tag, "Waiting for the app-side accessibility service to confirm the recorder dialog")
+            // Grace delay so the accessibility service can click the dialog before the taps start.
+            Thread.sleep(EXTERNAL_CONFIRM_TAP_DELAY_MS)
+            // Tap-to-skip in a loop: the countdown overlay's appearance time varies, so keep
+            // tapping until the projection shows up (skip succeeded or countdown ran its course).
+            val deadline = System.currentTimeMillis() + STATE_TIMEOUT_MS
+            var becameActive = false
+            while (System.currentTimeMillis() < deadline) {
+                if (isRecordingActive()) {
+                    becameActive = true
+                    break
+                }
+                skipCountdownOnce()
+                Thread.sleep(STATE_POLL_MS)
+            }
+            becameActive
+        } else {
+            if (confirmStart()) {
+                afterStartConfirmed()
+                true
+            } else {
+                false
+            }
+        }
+        if (!confirmed) {
             AppLogger.w(tag, "Start flow was not confirmed")
             return false
         }
-
-        afterStartConfirmed()
 
         return waitForProjectionState(targetActive = true)
     }

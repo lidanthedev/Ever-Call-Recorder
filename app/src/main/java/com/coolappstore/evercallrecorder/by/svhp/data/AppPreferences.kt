@@ -80,6 +80,8 @@ class AppPreferences(context: Context) {
         const val RECORD_TELEPHONY_CALLS = true
         // Whether to delete the source screen recording from DCIM after its audio was extracted.
         const val DELETE_SCREEN_RECORDING_AFTER_IMPORT = false
+        // How the recorder's "Start recording" dialog is confirmed. Default: shell-side uiautomator.
+        val SCREEN_RECORDER_CONFIRM_MODE = ScreenRecorderConfirmMode.UIAUTOMATOR
     }
 
     enum class Key(val id: String) {
@@ -128,7 +130,24 @@ class AppPreferences(context: Context) {
         RECORD_WHATSAPP_CALLS("record_whatsapp_calls"),
         RECORD_TELEGRAM_CALLS("record_telegram_calls"),
         RECORD_TELEPHONY_CALLS("record_telephony_calls"),
-        DELETE_SCREEN_RECORDING_AFTER_IMPORT("delete_screen_recording_after_import");
+        DELETE_SCREEN_RECORDING_AFTER_IMPORT("delete_screen_recording_after_import"),
+        SCREEN_RECORDER_CONFIRM_MODE("screen_recorder_confirm_mode");
+    }
+
+    /**
+     * How the Samsung screen recorder's "Start recording" confirmation dialog is handled.
+     *
+     * - [UIAUTOMATOR]   - shell-side `uiautomator dump` + `input tap` (works without any extra
+     *   permission, but each dump costs ~2-5 s).
+     * - [ACCESSIBILITY] - app-side [android.accessibilityservice.AccessibilityService] clicks the
+     *   dialog button in-memory (~ms). Requires the user to enable the service in system settings.
+     */
+    enum class ScreenRecorderConfirmMode(val key: String) {
+        UIAUTOMATOR("uiautomator"), ACCESSIBILITY("accessibility");
+        companion object {
+            fun fromKey(key: String?): ScreenRecorderConfirmMode =
+                entries.firstOrNull { it.key == key } ?: UIAUTOMATOR
+        }
     }
 
     enum class IgnoreContactsMode(val key: String) {
@@ -394,4 +413,11 @@ class AppPreferences(context: Context) {
      */
     fun isDeleteScreenRecordingAfterImportEnabled() = getBoolean(Key.DELETE_SCREEN_RECORDING_AFTER_IMPORT, DefaultsValue.DELETE_SCREEN_RECORDING_AFTER_IMPORT)
     fun setDeleteScreenRecordingAfterImportEnabled(enabled: Boolean) = setBoolean(Key.DELETE_SCREEN_RECORDING_AFTER_IMPORT, enabled)
+
+    /**
+     * How the screen recorder's confirmation dialog is handled (see [ScreenRecorderConfirmMode]).
+     * Only applies to screen-recorder backends (e.g. "Samsung Screen Recorder").
+     */
+    fun getScreenRecorderConfirmMode() = ScreenRecorderConfirmMode.fromKey(getString(Key.SCREEN_RECORDER_CONFIRM_MODE, DefaultsValue.SCREEN_RECORDER_CONFIRM_MODE.key))
+    fun setScreenRecorderConfirmMode(mode: ScreenRecorderConfirmMode) = setString(Key.SCREEN_RECORDER_CONFIRM_MODE, mode.key)
 }

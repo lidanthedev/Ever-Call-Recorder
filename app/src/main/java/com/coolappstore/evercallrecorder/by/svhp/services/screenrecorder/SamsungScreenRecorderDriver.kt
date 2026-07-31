@@ -156,6 +156,17 @@ class SamsungScreenRecorderDriver : ScreenRecorderDriver() {
         }
     }
 
+    /**
+     * Accessibility mode: single center tap for the driver's tap loop — taps keep firing every
+     * poll interval until the projection appears, so the countdown gets skipped regardless of
+     * how late the overlay shows up.
+     */
+    override fun skipCountdownOnce() {
+        val (x, y) = getCountdownSkipTapPoint()
+        AppLogger.d(tag, "Tapping ($x, $y) to skip the recorder countdown (accessibility mode)")
+        execShellCommand("input tap $x $y")
+    }
+
     /** Screen center parsed from `wm size`, cached per driver lifetime. */
     private var cachedScreenCenter: Pair<Int, Int>? = null
 

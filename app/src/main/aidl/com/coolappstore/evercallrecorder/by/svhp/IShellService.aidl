@@ -25,8 +25,14 @@ interface IShellService {
      * Wakes the screen, runs the driver's prerequisites + start trigger + confirm flow, then
      * polls the media projection state until the recorder session is active.
      * Returns false if a screen recording was already active or the flow timed out.
+     *
+     * confirmMode selects how the recorder's "Start recording" dialog is confirmed:
+     *   0 (CONFIRM_UIAUTOMATOR)   — shell-side uiautomator dump + input tap (slow, no extra setup).
+     *   1 (CONFIRM_ACCESSIBILITY) — the app-side accessibility service clicks the dialog; the
+     *                               shell process only waits for the projection to become active.
+     * Constants live in services/screenrecorder/ScreenRecorderDriver.
      */
-    boolean startScreenRecording(String backendKey) = 4;
+    boolean startScreenRecording(String backendKey, int confirmMode) = 4;
 
     /**
      * Stops the recorder via the driver's stop trigger. No-op (returns true) when no session

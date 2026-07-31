@@ -266,6 +266,18 @@
     <string name="settings_debug_action_ringing" translatable="false">Ringing</string>
     <string name="settings_debug_action_offhook" translatable="false">Off Hook</string>
     <string name="settings_debug_action_idle" translatable="false">Idle / End</string>
+    <string name="settings_debug_action_screen_recorder" translatable="false">Screen Recorder (5s)</string>
+    <string name="settings_debug_screen_recorder_starting" translatable="false">Starting screen recorder test (5s)…</string>
+    <string name="settings_debug_screen_recorder_success" translatable="false">Screen recorder test saved: %1$s</string>
+    <string name="settings_debug_screen_recorder_failed" translatable="false">Screen recorder test failed: %1$s</string>
+    <string name="settings_screen_recorder_confirm_mode">Recorder dialog confirmation</string>
+    <string name="settings_screen_recorder_confirm_uiautomator">uiautomator dump (shell)</string>
+    <string name="settings_screen_recorder_confirm_uiautomator_desc">Works everywhere, no extra permission. Slow: each dump takes 2–5 s.</string>
+    <string name="settings_screen_recorder_confirm_accessibility">Accessibility service (fast)</string>
+    <string name="settings_screen_recorder_confirm_accessibility_desc">Fastest (~10 ms). Requires enabling our accessibility service; the 3 s countdown cannot be skipped.</string>
+    <string name="settings_screen_recorder_a11y_disabled_warning">Accessibility service is not enabled. It will fall back to uiautomator until you enable it.</string>
+    <string name="settings_screen_recorder_a11y_open_settings">Open accessibility settings</string>
+    <string name="screen_recorder_a11y_service_description">Confirms the screen recorder\'s "Start recording" dialog automatically when recording app calls. Only watches the Samsung Screen Recorder app.</string>
 
     <!-- Settings Screen: About/Server Section -->
     <string name="settings_copy_version">Copy Version</string>

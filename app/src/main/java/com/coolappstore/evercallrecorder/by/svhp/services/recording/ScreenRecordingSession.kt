@@ -18,6 +18,8 @@ import com.coolappstore.evercallrecorder.by.svhp.R
 import com.coolappstore.evercallrecorder.by.svhp.data.AppPreferences
 import com.coolappstore.evercallrecorder.by.svhp.data.recordings.RecordingMetadata
 import com.coolappstore.evercallrecorder.by.svhp.integrations.scrcpy.ScrcpyAudioCodec
+import com.coolappstore.evercallrecorder.by.svhp.services.screenrecorder.ScreenRecorderAccessibilityService
+import com.coolappstore.evercallrecorder.by.svhp.services.screenrecorder.ScreenRecorderDriver
 import com.coolappstore.evercallrecorder.by.svhp.system.storage.SafHelper
 import com.coolappstore.evercallrecorder.by.svhp.utils.AppLogger
 import com.coolappstore.evercallrecorder.by.svhp.utils.RecordingFileNameFormatter
@@ -91,7 +93,7 @@ class ScreenRecordingSession(
             sessionStartEpochSec = System.currentTimeMillis() / 1000
 
             val started = try {
-                shellService.startScreenRecording(backendKey)
+                shellService.startScreenRecording(backendKey, resolveConfirmMode())
             } catch (e: Exception) {
                 throw PipelineInitializationException(
                     userFriendlyMessage = context.getString(R.string.recording_error_start_failed),
@@ -109,6 +111,24 @@ class ScreenRecordingSession(
             isActive = true
             AppLogger.i(TAG, "Samsung screen recorder session started for ${metadata.sourceApp} call")
         }
+    }
+
+    /**
+     * Maps the user's "Recorder dialog confirmation" preference to the shell-side constant.
+     * ACCESSIBILITY requires [ScreenRecorderAccessibilityService] to be enabled by the user in
+     * system settings; without it the dialog would never be clicked, so we fall back to the
+     * (slower but self-sufficient) uiautomator path instead of failing the recording.
+     */
+    private fun resolveConfirmMode(): Int {
+        val mode = AppPreferences(context).getScreenRecorderConfirmMode()
+        if (mode == AppPreferences.ScreenRecorderConfirmMode.ACCESSIBILITY) {
+            if (ScreenRecorderAccessibilityService.isServiceEnabled(context)) {
+                AppLogger.i(TAG, "Dialog confirmation via accessibility service (fast path)")
+                return ScreenRecorderDriver.CONFIRM_ACCESSIBILITY
+            }
+            AppLogger.w(TAG, "Accessibility confirmation selected but the service is not enabled; falling back to uiautomator")
+        }
+        return ScreenRecorderDriver.CONFIRM_UIAUTOMATOR
     }
 
     /**
