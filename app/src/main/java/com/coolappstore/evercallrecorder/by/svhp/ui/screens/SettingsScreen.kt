@@ -942,6 +942,7 @@ private fun RecordingSection(
 
     val recordWhatsAppCalls = remember(updateTrigger) { preferences.isRecordWhatsAppCallsEnabled() }
     val recordTelegramCalls = remember(updateTrigger) { preferences.isRecordTelegramCallsEnabled() }
+    val recordTelephonyCalls = remember(updateTrigger) { preferences.isRecordTelephonyCallsEnabled() }
     var showAppCallRecordingDialog by remember { mutableStateOf(false) }
     var showAppCallRecordingUnavailableDialog by remember { mutableStateOf(false) }
     val appCallRecordingSummary = buildList {
@@ -1009,6 +1010,13 @@ private fun RecordingSection(
             supporting = appCallRecordingSummary,
             supportingColor = if (appCallRecordingEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             onClick = { showAppCallRecordingUnavailableDialog = true }
+        )
+        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+        ToggleListItem(
+            label = stringResource(R.string.settings_record_telephony_calls),
+            checked = recordTelephonyCalls,
+            onCheckedChange = { actions.setRecordTelephonyCallsEnabled(it) },
+            description = stringResource(R.string.settings_record_telephony_calls_desc)
         )
         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
         SectionListItem(icon = storageIcon, headline = stringResource(R.string.settings_recording_folder_label), supporting = storageSupportingText, supportingColor = MaterialTheme.colorScheme.primary, onClick = onStorageClick)
@@ -1486,6 +1494,7 @@ private fun SettingsScreenPreview() {
             override fun disableAppLock() {}
             override fun verifyAppLockSecret(secret: String): Boolean = true
             override fun setRecordCallsFromApp(target: AppCallTarget, enabled: Boolean) {}
+            override fun setRecordTelephonyCallsEnabled(enabled: Boolean) {}
         }
         SettingsContent(preferences = dummyPreferences, updateTrigger = 0, actions = dummyActions, contactPickerState = null, onStorageClick = {}, onOpenContactsIncoming = {}, onOpenContactsOutgoing = {}, onConfirmContacts = {}, onDismissContacts = {}, onExportLogs = {}, onBack = {})
     }

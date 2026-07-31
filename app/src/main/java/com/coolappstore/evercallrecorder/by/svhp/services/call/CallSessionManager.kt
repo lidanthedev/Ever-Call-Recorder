@@ -273,6 +273,14 @@ class CallSessionManager private constructor(context: Context) {
             AppLogger.d(TAG, "Current call session has already sent a intent that started RecordingForegroundService. Skipping duplicate intent.")
             return
         }
+
+        // Master switch: telephony recording disabled entirely (e.g. user relies on a built-in
+        // phone recorder and only wants VoIP calls recorded). Neither START nor STANDBY is sent.
+        if (!preferences.isRecordTelephonyCallsEnabled()) {
+            AppLogger.i(TAG, "Telephony call recording is disabled in settings. Ignoring this phone call.")
+            return
+        }
+
         val sessionMetadata = session.currentMetadata ?: throw IllegalStateException("Metadata should have been determined by now. There is a logic error.")
 
         if (shouldAutoRecord(sessionMetadata)) {

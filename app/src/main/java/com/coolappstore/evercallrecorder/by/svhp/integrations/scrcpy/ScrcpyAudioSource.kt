@@ -34,6 +34,10 @@ import com.coolappstore.evercallrecorder.by.svhp.R
  * @property minApi          Minimum Android API level required (inclusive).
  * @property maxApi          Maximum Android API level supported (inclusive), or null for no upper bound.
  * @property isDebugOnly     `true` if this source should only appear when debug mode is active.
+ * @property isScreenRecorderBackend `true` if this entry is NOT a scrcpy `audio_source` value but the
+ *                           Samsung system screen recorder backend (see docs/SHIZUKU_SYSTEM_RECORD.md).
+ *                           Such entries must never be passed to scrcpy-server; the recording engine
+ *                           branches to a completely different pipeline before building server args.
  */
 enum class ScrcpyAudioSource(
     val cliKey: String,
@@ -41,7 +45,8 @@ enum class ScrcpyAudioSource(
     val descriptionResId: Int,
     val minApi: Int,
     val maxApi: Int?,
-    val isDebugOnly: Boolean
+    val isDebugOnly: Boolean,
+    val isScreenRecorderBackend: Boolean = false
 ) {
 
     /**
@@ -195,6 +200,26 @@ enum class ScrcpyAudioSource(
         minApi            = 7,
         maxApi            = null,
         isDebugOnly       = true
+    ),
+
+    /**
+     * SAMSUNG_SCREEN_RECORDER — NOT a scrcpy source. Uses Samsung's built-in system screen
+     * recorder (Smart Capture) to capture app (VoIP) calls, automated through the Quick Settings
+     * tile via the Shizuku shell process plus an AccessibilityService that confirms the
+     * "Start recording" dialog. The resulting screen recording is imported and its audio track
+     * is extracted to an .m4a file. See docs/SHIZUKU_SYSTEM_RECORD.md.
+     *
+     * Used only for calls originating from messaging apps ([RecordingMetadata.sourceApp] != null);
+     * regular telephony calls fall back to [VOICE_CALL] when this entry is selected.
+     */
+    SAMSUNG_SCREEN_RECORDER(
+        cliKey            = "samsung-screen-recorder",
+        titleResId        = R.string.audio_source_samsung_screen_recorder,
+        descriptionResId  = R.string.audio_source_samsung_screen_recorder_description,
+        minApi            = 30,
+        maxApi            = null,
+        isDebugOnly       = false,
+        isScreenRecorderBackend = true
     );
 
     companion object {

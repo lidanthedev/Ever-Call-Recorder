@@ -32,6 +32,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.coroutines.cancellation.CancellationException
 
 /**
@@ -113,7 +114,17 @@ class RecordingForegroundService : Service() {
 
     /** True only if the pipeline is actively reading and capturing audio. */
     private val isCurrentlyRecording: Boolean
-        get() = (currentState as? RecordingServiceState.Active)?.engine?.audioPipeReadJob?.isActive == true
+        get() = (currentState as? RecordingServiceState.Active)?.let {
+            it.engine.audioPipeReadJob?.isActive == true || it.engine.screenRecordingSession?.isActive == true
+        } == true
+
+    /**
+     * True while [stopRecordingSessionAndService]'s release coroutine is still running
+     * (stop + file import can take several seconds on the screen-recorder backend).
+     * Prevents a duplicate stop request from calling stopSelf() and cancelling it mid-flight.
+     */
+    @Volatile
+    private var releaseInFlight: Boolean = false
 
     // ── Service lifecycle ──────────────────────────────────────────────────────────────
 
@@ -282,7 +293,15 @@ class RecordingForegroundService : Service() {
         // This is the guaranteed last callback before the service process is cleaned up.
         AppLogger.v(TAG, "RecordingForegroundService is destroying... Ensuring cleanup...")
         serviceScope.cancel()
-        stopRecordingSessionAndService()
+        // The service scope is cancelled above, so the coroutine inside stopRecordingSessionAndService
+        // would never run. If a session is still active at this point (e.g. OS-driven destroy), release
+        // it with the blocking variant. Release is idempotent (guarded runCatching + null checks), so
+        // this is also safe right after a normal stop.
+        (currentState as? RecordingServiceState.Active)?.engine?.let { activeSession ->
+            AppLogger.w(TAG, "onDestroy with an active session, releasing it synchronously as a last resort")
+            runCatching { activeSession.release(shellService) }
+            currentState = RecordingServiceState.Standby(null)
+        }
         shizukuManager.unbind()
         if (appPreferences.isShizukuAutoManageEnabled() && !appPreferences.isShizukuKeepAliveEnabled()) {
             ShizukuConnectionManager.stopServer(this, appPreferences.getShizukuAuthKey())
@@ -295,8 +314,10 @@ class RecordingForegroundService : Service() {
      * Orchestrates the recording state at the Service level.
      * Creates a new [AudioRecordingEngine], starts the I/O pipeline, updates the visible notification,
      * and handles fatal [PipelineInitializationException].
+     * Suspends: the pipeline start runs on [Dispatchers.IO] since the Samsung screen-recorder
+     * backend polls the recorder state for several seconds.
      */
-    private fun startNewRecordingSession(service: IShellService, metadata: RecordingMetadata) {
+    private suspend fun startNewRecordingSession(service: IShellService, metadata: RecordingMetadata) {
         if (hasSession) {
             AppLogger.w(TAG, "startNewRecordingSession() called while already active – ignoring")
             return
@@ -306,8 +327,10 @@ class RecordingForegroundService : Service() {
         val activeSession = AudioRecordingEngine()
 
         try {
-            // 2. Try to start the pipeline
-            activeSession.startPipeline(this, service, metadata)
+            // 2. Try to start the pipeline (off the main thread; blocking state polling)
+            withContext(Dispatchers.IO) {
+                activeSession.startPipeline(this@RecordingForegroundService, service, metadata)
+            }
             // 3. Success
             currentState = RecordingServiceState.Active(activeSession, false, metadata)
             AppLogger.i(TAG, "Recording pipeline started successfully")
@@ -315,7 +338,7 @@ class RecordingForegroundService : Service() {
             AppLogger.e(TAG, e.message ?: "", e.cause ?: e)
             notificationHelper.showErrorNotification(e.userFriendlyMessage)
             // Ensure partial resources are cleaned up
-            activeSession.cancel(this, shellService)
+            withContext(Dispatchers.IO) { activeSession.cancel(this@RecordingForegroundService, shellService) }
             currentState = RecordingServiceState.Standby(metadata)
             stopRecordingSessionAndService()
         }
@@ -324,13 +347,23 @@ class RecordingForegroundService : Service() {
     /**
      * Stops the current recording session and stop the foreground recording service.
      *
-     * Always trigger [AudioRecordingEngine.release] so that if we are currently recording,
-     * we safely shuts down the pipeline and saves the file, clears the current session,
-     * removes the foreground notification, and stops the service.
+     * The actual release runs in a service-scope coroutine on [Dispatchers.IO]: the Samsung
+     * screen-recorder backend blocks for several seconds while stopping the system recorder and
+     * importing/extracting the recording, which must not happen on the main thread.
+     * The state is cleared synchronously first so a duplicate stop (or a subsequent onDestroy)
+     * sees no active session and skips a second release.
      */
     private fun stopRecordingSessionAndService() {
         val activeSession = (currentState as? RecordingServiceState.Active)?.engine
         if (activeSession == null) {
+            if (releaseInFlight) {
+                // A duplicate stop (e.g. telephony IDLE AND the app-call notification both fired)
+                // must NOT stopSelf() here: onDestroy cancels serviceScope, which would kill the
+                // in-flight release (and its recording import) mid-flight. The release coroutine
+                // stops the service itself when done.
+                AppLogger.d(TAG, "Duplicate stop request while a release is still in flight. Letting it finish.")
+                return
+            }
             AppLogger.d(TAG, "No active session, exiting standby state, removing foreground notification and stopping service.")
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf() // Stop the service since the session is over
@@ -340,50 +373,62 @@ class RecordingForegroundService : Service() {
 
         // Capture metadata before releasing resources, in case we need to query call logs for the final file name if phone number is empty.
         val originalMetadata = activeSession.initializationMetadata
-        val uriToRename = activeSession.currentRecordingUri
 
-        // Release all resources held by the recording session, and stop the remote shell service, finalizing the recording file.
-        activeSession.release(shellService)
+        // Synchronously mark the session as ended so duplicate stop requests and onDestroy skip a second release.
+        currentState = RecordingServiceState.Standby(null)
 
-        // If the initialization metadata do not contain a phone number, we attempt to query the call log as a fallback.
-        // TODO: Remove this fallback logic once we have a more reliable way to get phone number (using Shizuku and hidden api)
-        if (originalMetadata != null && originalMetadata.rawPhoneNumber.isNullOrBlank() && uriToRename != null) {
-            AppLogger.d(TAG, "Recording ended without a phone number. Querying CallLog as a fallback to get more information...")
-            // We use GlobalScope/IO because the Service's scope might be cancelled immediately in onDestroy.
-            // Android gives the process some time to live, so this is safe for a few seconds.
-            CoroutineScope(Dispatchers.IO).launch {
-                val rawNumber =
-                    tryGetFinalNumberFromLog(applicationContext, originalMetadata.direction)
-                val sanitizedRaw = PhoneNumberManager.sanitizeOemNumber(rawNumber) ?: ""
+        serviceScope.launch {
+            releaseInFlight = true
+            try {
+                // Release all resources held by the recording session, and stop the remote shell service, finalizing the recording file.
+                // For the screen-recorder backend this also imports the recording and sets currentRecordingUri.
+                withContext(Dispatchers.IO) { activeSession.releaseSuspend(shellService) }
+            } finally {
+                releaseInFlight = false
+            }
+            val uriToRename = activeSession.currentRecordingUri
 
-                val finalNumber = if (sanitizedRaw.isNotBlank()) {
-                    val parsed = phoneNumberManager.parsePhoneNumber(sanitizedRaw)
-                    if (parsed != null) {
-                        phoneNumberManager.formatToE164(parsed)
+            // If the initialization metadata do not contain a phone number, we attempt to query the call log as a fallback.
+            // TODO: Remove this fallback logic once we have a more reliable way to get phone number (using Shizuku and hidden api)
+            if (originalMetadata != null && originalMetadata.rawPhoneNumber.isNullOrBlank() && uriToRename != null) {
+                AppLogger.d(TAG, "Recording ended without a phone number. Querying CallLog as a fallback to get more information...")
+                // We use GlobalScope/IO because the Service's scope might be cancelled immediately in onDestroy.
+                // Android gives the process some time to live, so this is safe for a few seconds.
+                CoroutineScope(Dispatchers.IO).launch {
+                    val rawNumber =
+                        tryGetFinalNumberFromLog(applicationContext, originalMetadata.direction)
+                    val sanitizedRaw = PhoneNumberManager.sanitizeOemNumber(rawNumber) ?: ""
+
+                    val finalNumber = if (sanitizedRaw.isNotBlank()) {
+                        val parsed = phoneNumberManager.parsePhoneNumber(sanitizedRaw)
+                        if (parsed != null) {
+                            phoneNumberManager.formatToE164(parsed)
+                        }
+                        sanitizedRaw
+                    } else {
+                        sanitizedRaw
                     }
-                    sanitizedRaw
-                } else {
-                    sanitizedRaw
-                }
 
-                if (finalNumber.isNotBlank()) {
-                    val updatedMeta = originalMetadata.copy(rawPhoneNumber = finalNumber)
-                    val newName = RecordingFileNameFormatter.formatFileName(applicationContext, updatedMeta, activeSession.currentCodecEnum)
-                    try {
-                        SafHelper.renameRecording(applicationContext, uriToRename, newName)
-                        AppLogger.d(TAG, "Successfully renamed wrongly detected anonymous recording to: $newName")
-                    } catch (e: Exception) {
-                        AppLogger.e(TAG, "Failed to rename file using CallLog fallback", e)
+                    if (finalNumber.isNotBlank()) {
+                        val updatedMeta = originalMetadata.copy(rawPhoneNumber = finalNumber)
+                        // Screen-recorder sessions produce .m4a files; currentCodecEnum is already
+                        // set to AAC for them, so this picks the right extension in both backends.
+                        val newName = RecordingFileNameFormatter.formatFileName(applicationContext, updatedMeta, activeSession.currentCodecEnum)
+                        try {
+                            SafHelper.renameRecording(applicationContext, uriToRename, newName)
+                            AppLogger.d(TAG, "Successfully renamed wrongly detected anonymous recording to: $newName")
+                        } catch (e: Exception) {
+                            AppLogger.e(TAG, "Failed to rename file using CallLog fallback", e)
+                        }
+                    } else {
+                        AppLogger.d(TAG, "Call log confirmed the call is anonymous, or no actual number was found. Keeping file name as is.")
                     }
-                } else {
-                    AppLogger.d(TAG, "Call log confirmed the call is anonymous, or no actual number was found. Keeping file name as is.")
                 }
             }
+            AppLogger.i(TAG, "The recording session has been stopped and resources have been released. Stopping foreground service. Goodbye >3")
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf() // Stop the service since the session is over
         }
-        currentState = RecordingServiceState.Standby(null)
-        AppLogger.i(TAG, "The recording session has been stopped and resources have been released. Stopping foreground service. Goodbye >3")
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf() // Stop the service since the session is over
     }
 
     /**

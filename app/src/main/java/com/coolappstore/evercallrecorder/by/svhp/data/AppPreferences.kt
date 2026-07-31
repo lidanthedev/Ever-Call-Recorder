@@ -72,6 +72,9 @@ class AppPreferences(context: Context) {
         // Record calls from apps defaults — both OFF (unticked) until the user opts in.
         const val RECORD_WHATSAPP_CALLS = false
         const val RECORD_TELEGRAM_CALLS = false
+        // Master switch for regular telephony call recording. ON by default (existing behavior);
+        // users with a built-in phone recorder (e.g. Samsung) can turn it off and record VoIP only.
+        const val RECORD_TELEPHONY_CALLS = true
     }
 
     enum class Key(val id: String) {
@@ -117,7 +120,8 @@ class AppPreferences(context: Context) {
         APP_LOCK_SECRET_HASH("app_lock_secret_hash"),
         APP_LOCK_SALT("app_lock_salt"),
         RECORD_WHATSAPP_CALLS("record_whatsapp_calls"),
-        RECORD_TELEGRAM_CALLS("record_telegram_calls");
+        RECORD_TELEGRAM_CALLS("record_telegram_calls"),
+        RECORD_TELEPHONY_CALLS("record_telephony_calls");
     }
 
     enum class IgnoreContactsMode(val key: String) {
@@ -336,4 +340,13 @@ class AppPreferences(context: Context) {
 
     /** True if at least one "record calls from apps" target is enabled. */
     fun isAnyAppCallRecordingEnabled() = isRecordWhatsAppCallsEnabled() || isRecordTelegramCallsEnabled()
+
+    /**
+     * Master switch for recording regular telephony (SIM) calls. When off, the telephony pipeline
+     * ([com.coolappstore.evercallrecorder.by.svhp.services.call.CallSessionManager]) never starts
+     * the recording service at all — useful for users who already have a built-in phone recorder
+     * and only want VoIP (app) calls recorded by this app. ON by default.
+     */
+    fun isRecordTelephonyCallsEnabled() = getBoolean(Key.RECORD_TELEPHONY_CALLS, DefaultsValue.RECORD_TELEPHONY_CALLS)
+    fun setRecordTelephonyCallsEnabled(enabled: Boolean) = setBoolean(Key.RECORD_TELEPHONY_CALLS, enabled)
 }

@@ -67,6 +67,7 @@ interface SettingsActions {
     fun disableAppLock()
     fun verifyAppLockSecret(secret: String): Boolean
     fun setRecordCallsFromApp(target: com.coolappstore.evercallrecorder.by.svhp.services.call.AppCallTarget, enabled: Boolean)
+    fun setRecordTelephonyCallsEnabled(enabled: Boolean)
 }
 
 class SettingsViewModel(application: Application) : AndroidViewModel(application), SettingsActions {
@@ -140,6 +141,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
         refresh()
     }
+    override fun setRecordTelephonyCallsEnabled(enabled: Boolean) { preferences.setRecordTelephonyCallsEnabled(enabled); refresh() }
     override fun setAppLanguage(languageCode: String) {
         val localeList = if (languageCode.isEmpty()) LocaleListCompat.getEmptyLocaleList()
                          else LocaleListCompat.forLanguageTags(languageCode)
