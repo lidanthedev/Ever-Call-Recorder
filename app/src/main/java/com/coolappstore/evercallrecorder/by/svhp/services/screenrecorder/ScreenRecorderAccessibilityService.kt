@@ -42,12 +42,24 @@ import com.coolappstore.evercallrecorder.by.svhp.utils.AppLogger
  * packages only, so it sees no other app's windows. The user must enable it manually in system
  * Accessibility settings; when it is not enabled, the recording flow falls back to the
  * uiautomator path automatically. It also self-gates on the confirmation-mode preference so
- * both mechanisms never race the same dialog.
+ * both mechanisms never race the same dialog, AND on [isConfirmationExpected] so it never
+ * confirms a dialog the user opened manually via the QS tile.
  */
 class ScreenRecorderAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "SCR:ScreenRecorderAccessibilityService"
+
+        /**
+         * True only while OUR app is waiting for the recorder's start dialog (set by
+         * [com.coolappstore.evercallrecorder.by.svhp.services.recording.ScreenRecordingSession]
+         * around its shell-side start call, in accessibility confirmation mode only).
+         * Prevents the service from auto-confirming a dialog the USER opened manually by
+         * tapping the QS tile themselves — with no call in progress, the dialog belongs to
+         * the user and must not be clicked away.
+         */
+        @Volatile
+        var isConfirmationExpected = false
 
         /** Min delay between two positive-button clicks; repeated window events fire in bursts. */
         private const val CLICK_DEBOUNCE_MS = 2_000L
@@ -90,6 +102,13 @@ class ScreenRecorderAccessibilityService : AccessibilityService() {
         // the service dismisses it instantly, the shell-side dump then never sees the button
         // and reports a false "session never became active" failure while the recorder runs.
         if (preferences.getScreenRecorderConfirmMode() != AppPreferences.ScreenRecorderConfirmMode.ACCESSIBILITY) return
+
+        // Only confirm dialogs WE triggered (an app call is being recorded). A dialog from a
+        // manual QS tile tap (no call) belongs to the user — never click it.
+        if (!isConfirmationExpected) {
+            AppLogger.v(TAG, "Ignoring recorder dialog: no app-initiated recording session is expecting it")
+            return
+        }
 
         // A previous attempt at this service failed because the dialog never got clicked: the
         // recorder dialog is a system alert and may NOT be the "active" window, so the node tree

@@ -92,14 +92,23 @@ class ScreenRecordingSession(
 
             sessionStartEpochSec = System.currentTimeMillis() / 1000
 
+            // Accessibility confirmation: arm the service so it only auto-confirms the dialog
+            // while OUR start flow is in flight (never a dialog the user opened manually).
+            val confirmMode = resolveConfirmMode()
+            if (confirmMode == ScreenRecorderDriver.CONFIRM_ACCESSIBILITY) {
+                ScreenRecorderAccessibilityService.isConfirmationExpected = true
+            }
+
             val started = try {
-                shellService.startScreenRecording(backendKey, resolveConfirmMode())
+                shellService.startScreenRecording(backendKey, confirmMode)
             } catch (e: Exception) {
                 throw PipelineInitializationException(
                     userFriendlyMessage = context.getString(R.string.recording_error_start_failed),
                     technicalLogMessage = "Remote exception calling startScreenRecording",
                     cause = e
                 )
+            } finally {
+                ScreenRecorderAccessibilityService.isConfirmationExpected = false
             }
 
             if (!started) {
