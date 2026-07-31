@@ -943,6 +943,7 @@ private fun RecordingSection(
     val recordWhatsAppCalls = remember(updateTrigger) { preferences.isRecordWhatsAppCallsEnabled() }
     val recordTelegramCalls = remember(updateTrigger) { preferences.isRecordTelegramCallsEnabled() }
     val recordTelephonyCalls = remember(updateTrigger) { preferences.isRecordTelephonyCallsEnabled() }
+    val deleteScreenRecordingAfterImport = remember(updateTrigger) { preferences.isDeleteScreenRecordingAfterImportEnabled() }
     var showAppCallRecordingDialog by remember { mutableStateOf(false) }
     var showAppCallRecordingUnavailableDialog by remember { mutableStateOf(false) }
     val appCallRecordingSummary = buildList {
@@ -1017,6 +1018,13 @@ private fun RecordingSection(
             checked = recordTelephonyCalls,
             onCheckedChange = { actions.setRecordTelephonyCallsEnabled(it) },
             description = stringResource(R.string.settings_record_telephony_calls_desc)
+        )
+        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+        ToggleListItem(
+            label = stringResource(R.string.settings_delete_screen_recording_after_import),
+            checked = deleteScreenRecordingAfterImport,
+            onCheckedChange = { actions.setDeleteScreenRecordingAfterImportEnabled(it) },
+            description = stringResource(R.string.settings_delete_screen_recording_after_import_desc)
         )
         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
         SectionListItem(icon = storageIcon, headline = stringResource(R.string.settings_recording_folder_label), supporting = storageSupportingText, supportingColor = MaterialTheme.colorScheme.primary, onClick = onStorageClick)
@@ -1495,6 +1503,7 @@ private fun SettingsScreenPreview() {
             override fun verifyAppLockSecret(secret: String): Boolean = true
             override fun setRecordCallsFromApp(target: AppCallTarget, enabled: Boolean) {}
             override fun setRecordTelephonyCallsEnabled(enabled: Boolean) {}
+            override fun setDeleteScreenRecordingAfterImportEnabled(enabled: Boolean) {}
         }
         SettingsContent(preferences = dummyPreferences, updateTrigger = 0, actions = dummyActions, contactPickerState = null, onStorageClick = {}, onOpenContactsIncoming = {}, onOpenContactsOutgoing = {}, onConfirmContacts = {}, onDismissContacts = {}, onExportLogs = {}, onBack = {})
     }

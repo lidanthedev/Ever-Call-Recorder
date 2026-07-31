@@ -617,19 +617,24 @@ class ShellService : IShellService.Stub {
     }
 
     /**
+     * Finds the newest finalized recording in [SAMSUNG_RECORDINGS_DIR] with mtime >= [minEpochSec].
+     * Hidden ".pending-*.mp4" files are skipped: Samsung writes the recording under that name
+     * while finalizing and renames it to the final name only once the file is complete.
+     */
+    private fun findLatestScreenRecording(minEpochSec: Long): File? {
+        return File(SAMSUNG_RECORDINGS_DIR).listFiles()
+            ?.filter { it.isFile && !it.name.startsWith(".") && it.extension.equals("mp4", ignoreCase = true) && it.lastModified() / 1000 >= minEpochSec }
+            ?.maxByOrNull { it.lastModified() }
+    }
+
+    /**
      * Opens the newest file in [SAMSUNG_RECORDINGS_DIR] with mtime >= [minEpochSec] and returns
      * a read-only FD for it. The mtime guard prevents reporting an older, unrelated recording.
      *
      * @return A read-only [ParcelFileDescriptor], or null if no matching file exists.
      */
     override fun openLatestScreenRecording(minEpochSec: Long): ParcelFileDescriptor? {
-        val dir = File(SAMSUNG_RECORDINGS_DIR)
-        val newest = dir.listFiles()
-            // Skip hidden ".pending-*.mp4" files: Samsung writes the recording under that name
-            // while finalizing and renames it to the final name only once the file is complete.
-            // Grabbing the pending file yields an unreadable/incomplete mp4 (no tracks).
-            ?.filter { it.isFile && !it.name.startsWith(".") && it.extension.equals("mp4", ignoreCase = true) && it.lastModified() / 1000 >= minEpochSec }
-            ?.maxByOrNull { it.lastModified() }
+        val newest = findLatestScreenRecording(minEpochSec)
         if (newest == null) {
             AppLogger.w(TAG, "No new screen recording found in $SAMSUNG_RECORDINGS_DIR (minEpochSec=$minEpochSec)")
             return null
@@ -640,6 +645,29 @@ class ShellService : IShellService.Stub {
         } catch (e: Exception) {
             AppLogger.e(TAG, "Failed to open ${newest.absolutePath}", e)
             null
+        }
+    }
+
+    /**
+     * Deletes the newest finalized recording with mtime >= [minEpochSec] (same selection rule as
+     * [openLatestScreenRecording]). Used to remove the source video after its audio track was
+     * successfully imported into the app library.
+     *
+     * @return true if a file was deleted.
+     */
+    override fun deleteLatestScreenRecording(minEpochSec: Long): Boolean {
+        val newest = findLatestScreenRecording(minEpochSec) ?: return false
+        return try {
+            val deleted = newest.delete()
+            if (deleted) {
+                AppLogger.i(TAG, "Deleted source screen recording: ${newest.absolutePath}")
+            } else {
+                AppLogger.w(TAG, "Failed to delete source screen recording: ${newest.absolutePath}")
+            }
+            deleted
+        } catch (e: Exception) {
+            AppLogger.e(TAG, "Error deleting ${newest.absolutePath}", e)
+            false
         }
     }
 

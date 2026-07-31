@@ -154,6 +154,8 @@
     <!-- Settings Screen: Record calls from apps -->
     <string name="settings_record_telephony_calls">Record phone calls</string>
     <string name="settings_record_telephony_calls_desc">Master switch for regular SIM/telephony calls. Turn off if your phone already has a built-in call recorder and you only want app (VoIP) calls recorded.</string>
+    <string name="settings_delete_screen_recording_after_import">Delete screen recording after import</string>
+    <string name="settings_delete_screen_recording_after_import_desc">Removes the original video from DCIM/Screen recordings once its audio has been extracted into your library. Only used with the "Samsung Screen Recorder" audio source.</string>
     <string name="settings_app_call_recording_label">Record calls from apps</string>
     <string name="settings_app_call_recording_off">Off</string>
     <string name="settings_app_call_recording_dialog_title">Record Calls From Apps</string>

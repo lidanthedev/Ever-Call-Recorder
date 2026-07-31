@@ -155,6 +155,14 @@ class ScreenRecordingSession(
                 return@withContext null
             }
 
+            // Optionally remove the source video from DCIM now that its audio is safely stored.
+            if (preferences.isDeleteScreenRecordingAfterImportEnabled()) {
+                val deleted = runCatching { shellService.deleteLatestScreenRecording(sessionStartEpochSec) }.getOrDefault(false)
+                if (!deleted) {
+                    AppLogger.w(TAG, "Source screen recording could not be deleted; it remains in DCIM/Screen recordings")
+                }
+            }
+
             AppLogger.i(TAG, "Imported screen recording as $fileName (${safResult.uri})")
             safResult.uri
         } finally {

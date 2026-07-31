@@ -75,6 +75,8 @@ class AppPreferences(context: Context) {
         // Master switch for regular telephony call recording. ON by default (existing behavior);
         // users with a built-in phone recorder (e.g. Samsung) can turn it off and record VoIP only.
         const val RECORD_TELEPHONY_CALLS = true
+        // Whether to delete the source screen recording from DCIM after its audio was extracted.
+        const val DELETE_SCREEN_RECORDING_AFTER_IMPORT = false
     }
 
     enum class Key(val id: String) {
@@ -121,7 +123,8 @@ class AppPreferences(context: Context) {
         APP_LOCK_SALT("app_lock_salt"),
         RECORD_WHATSAPP_CALLS("record_whatsapp_calls"),
         RECORD_TELEGRAM_CALLS("record_telegram_calls"),
-        RECORD_TELEPHONY_CALLS("record_telephony_calls");
+        RECORD_TELEPHONY_CALLS("record_telephony_calls"),
+        DELETE_SCREEN_RECORDING_AFTER_IMPORT("delete_screen_recording_after_import");
     }
 
     enum class IgnoreContactsMode(val key: String) {
@@ -349,4 +352,12 @@ class AppPreferences(context: Context) {
      */
     fun isRecordTelephonyCallsEnabled() = getBoolean(Key.RECORD_TELEPHONY_CALLS, DefaultsValue.RECORD_TELEPHONY_CALLS)
     fun setRecordTelephonyCallsEnabled(enabled: Boolean) = setBoolean(Key.RECORD_TELEPHONY_CALLS, enabled)
+
+    /**
+     * Whether the original screen-recording mp4 (in DCIM/Screen recordings) should be deleted
+     * after its audio track has been successfully extracted into the recording library.
+     * Only applies to the "Samsung Screen Recorder" audio source. OFF by default.
+     */
+    fun isDeleteScreenRecordingAfterImportEnabled() = getBoolean(Key.DELETE_SCREEN_RECORDING_AFTER_IMPORT, DefaultsValue.DELETE_SCREEN_RECORDING_AFTER_IMPORT)
+    fun setDeleteScreenRecordingAfterImportEnabled(enabled: Boolean) = setBoolean(Key.DELETE_SCREEN_RECORDING_AFTER_IMPORT, enabled)
 }

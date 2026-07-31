@@ -45,6 +45,13 @@ interface IShellService {
      */
     ParcelFileDescriptor openLatestScreenRecording(long minEpochSec) = 7;
 
+    /**
+     * Deletes the newest file in /sdcard/DCIM/Screen recordings/ whose mtime is >= minEpochSec
+     * (same selection rule as openLatestScreenRecording). Used to remove the source video after
+     * its audio track was successfully imported. Returns true if a file was deleted.
+     */
+    boolean deleteLatestScreenRecording(long minEpochSec) = 8;
+
     // The special Shizuku transaction code for "destroy" process
     void destroy() = 16777114;
 }
