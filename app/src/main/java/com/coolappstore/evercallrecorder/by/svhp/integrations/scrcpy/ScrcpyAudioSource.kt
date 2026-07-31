@@ -34,8 +34,10 @@ import com.coolappstore.evercallrecorder.by.svhp.R
  * @property minApi          Minimum Android API level required (inclusive).
  * @property maxApi          Maximum Android API level supported (inclusive), or null for no upper bound.
  * @property isDebugOnly     `true` if this source should only appear when debug mode is active.
- * @property isScreenRecorderBackend `true` if this entry is NOT a scrcpy `audio_source` value but the
- *                           Samsung system screen recorder backend (see docs/SHIZUKU_SYSTEM_RECORD.md).
+ * @property screenRecorderBackendKey `null` for real scrcpy `audio_source` values. Non-null marks
+ *                           this entry as a SYSTEM SCREEN RECORDER backend (see
+ *                           docs/SHIZUKU_SYSTEM_RECORD.md) and carries the key of its
+ *                           [com.coolappstore.evercallrecorder.by.svhp.services.screenrecorder.ScreenRecorderDriver].
  *                           Such entries must never be passed to scrcpy-server; the recording engine
  *                           branches to a completely different pipeline before building server args.
  * @property isAppsAudioSource `true` if this entry may be selected as the "Apps audio source"
@@ -49,7 +51,7 @@ enum class ScrcpyAudioSource(
     val minApi: Int,
     val maxApi: Int?,
     val isDebugOnly: Boolean,
-    val isScreenRecorderBackend: Boolean = false,
+    val screenRecorderBackendKey: String? = null,
     val isAppsAudioSource: Boolean = false
 ) {
 
@@ -224,9 +226,13 @@ enum class ScrcpyAudioSource(
         minApi            = 30,
         maxApi            = null,
         isDebugOnly       = false,
-        isScreenRecorderBackend = true,
+        screenRecorderBackendKey = "samsung",
         isAppsAudioSource = true
     );
+
+    /** True when this entry is a system screen recorder backend, not a scrcpy audio source. */
+    val isScreenRecorderBackend: Boolean
+        get() = screenRecorderBackendKey != null
 
     companion object {
         /**

@@ -209,6 +209,7 @@
 
     <string name="settings_audio_source">Audio source</string>
     <string name="settings_apps_audio_source">Apps audio source</string>
+    <string name="audio_source_backend_not_available">Not available on this device (the required system screen recorder app is not installed).</string>
     <string name="audio_source_voice_comm" translatable="false">Voice communication mic</string>
     <string name="audio_source_voice_comm_description">Microphone audio source tuned for voice communications. Built-in echo cancellation.</string>
 

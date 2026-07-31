@@ -17,40 +17,40 @@ interface IShellService {
 
     boolean isRecording() = 3;
 
-    // ── Samsung system screen recorder automation (shell-side, see docs/SHIZUKU_SYSTEM_RECORD.md) ──
+    // ── System screen recorder automation (shell-side, vendor drivers in services/screenrecorder) ──
+    // All methods take a backendKey matching ScrcpyAudioSource.screenRecorderBackendKey
+    // (e.g. "samsung") and delegate to the registered ScreenRecorderDriver.
 
     /**
-     * Wakes the screen, ensures the Screen recorder QS tile is present, clicks it, then polls
-     * dumpsys media_projection until Samsung's recorder session is active (the confirmation
-     * dialog is handled app-side by our AccessibilityService while this polls).
-     * Returns false if a screen recording was already active (tile click would have STOPPED it)
-     * or if the session never became active within the timeout.
+     * Wakes the screen, runs the driver's prerequisites + start trigger + confirm flow, then
+     * polls the media projection state until the recorder session is active.
+     * Returns false if a screen recording was already active or the flow timed out.
      */
-    boolean startScreenRecording() = 4;
+    boolean startScreenRecording(String backendKey) = 4;
 
     /**
-     * Stops Samsung's screen recorder by clicking the QS tile again (the tile toggles).
-     * No-op (returns true) when no session is active, so we never accidentally START a recording.
+     * Stops the recorder via the driver's stop trigger. No-op (returns true) when no session
+     * is active, so it can never accidentally START a recording.
      * Returns false if the session was still active after the stop attempt.
      */
-    boolean stopScreenRecording() = 5;
+    boolean stopScreenRecording(String backendKey) = 5;
 
-    /** True while dumpsys media_projection reports an active session owned by smartcapture. */
-    boolean isScreenRecordingActive() = 6;
-
-    /**
-     * Opens the newest file in /sdcard/DCIM/Screen recordings/ whose mtime is >= minEpochSec
-     * (guards against picking up an older recording). Returns a read-only FD, or null if none matched.
-     * The shell process can read /sdcard without any app storage permission.
-     */
-    ParcelFileDescriptor openLatestScreenRecording(long minEpochSec) = 7;
+    /** True while the driver's recorder owns an active media projection session. */
+    boolean isScreenRecordingActive(String backendKey) = 6;
 
     /**
-     * Deletes the newest file in /sdcard/DCIM/Screen recordings/ whose mtime is >= minEpochSec
-     * (same selection rule as openLatestScreenRecording). Used to remove the source video after
-     * its audio track was successfully imported. Returns true if a file was deleted.
+     * Opens the newest finalized recording whose mtime is >= minEpochSec (guards against
+     * picking up an older recording). Returns a read-only FD, or null if none matched.
+     * The shell process can read shared storage without any app storage permission.
      */
-    boolean deleteLatestScreenRecording(long minEpochSec) = 8;
+    ParcelFileDescriptor openLatestScreenRecording(String backendKey, long minEpochSec) = 7;
+
+    /**
+     * Deletes the newest finalized recording whose mtime is >= minEpochSec (same selection
+     * rule as openLatestScreenRecording). Used to remove the source video after its audio
+     * track was successfully imported. Returns true if a file was deleted.
+     */
+    boolean deleteLatestScreenRecording(String backendKey, long minEpochSec) = 8;
 
     // The special Shizuku transaction code for "destroy" process
     void destroy() = 16777114;

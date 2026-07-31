@@ -1283,6 +1283,7 @@ private fun AutoDeleteSection(preferences: AppPreferences, updateTrigger: Int, a
 
 @Composable
 private fun AudioSection(preferences: AppPreferences, updateTrigger: Int, actions: SettingsActions) {
+    val context = LocalContext.current
     val isDebugEnabled = remember(updateTrigger) { preferences.isDebugEnabled() }
     val audioSource    = remember(updateTrigger) { preferences.getAudioSource() }
     val appsAudioSource = remember(updateTrigger) { preferences.getAppsAudioSource() }
@@ -1298,9 +1299,17 @@ private fun AudioSection(preferences: AppPreferences, updateTrigger: Int, action
             val selectedAudio = audioSourceOptions.find { it.key == audioSource } ?: audioSourceOptions.first()
             M3DropdownField(label = stringResource(R.string.settings_audio_source), selected = selectedAudio, options = audioSourceOptions, onOptionSelected = { actions.setAudioSource(it.key) })
             selectedAudio.description?.let { desc -> Text(text = desc, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)) }
-            // Apps (VoIP) calls: only sources that can capture app-call audio (OUTPUT, Samsung Screen Recorder).
+            // Apps (VoIP) calls: only sources that can capture app-call audio (OUTPUT, screen recorder backends).
+            // Screen recorder backends are greyed out when their recorder package is not installed on this device.
             val appsSourceOptions = ScrcpyAudioSource.entries.filter { it.isAppsAudioSource }.map { source ->
-                OptionItem(key = source.cliKey, label = stringResource(source.titleResId), description = stringResource(source.descriptionResId), enabled = currentSdk >= source.minApi && (source.maxApi == null || currentSdk <= source.maxApi))
+                val backendSupported = source.screenRecorderBackendKey == null ||
+                    com.coolappstore.evercallrecorder.by.svhp.integrations.screenrecorder.ScreenRecorderBackends.isSupported(context, source.screenRecorderBackendKey!!)
+                OptionItem(
+                    key = source.cliKey,
+                    label = stringResource(source.titleResId),
+                    description = if (backendSupported) stringResource(source.descriptionResId) else stringResource(R.string.audio_source_backend_not_available),
+                    enabled = backendSupported && currentSdk >= source.minApi && (source.maxApi == null || currentSdk <= source.maxApi)
+                )
             }
             val selectedAppsAudio = appsSourceOptions.find { it.key == appsAudioSource } ?: appsSourceOptions.first()
             M3DropdownField(label = stringResource(R.string.settings_apps_audio_source), selected = selectedAppsAudio, options = appsSourceOptions, onOptionSelected = { actions.setAppsAudioSource(it.key) })

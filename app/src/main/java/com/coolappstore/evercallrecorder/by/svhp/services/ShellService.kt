@@ -20,6 +20,7 @@ import com.coolappstore.evercallrecorder.by.svhp.integrations.scrcpy.ScrcpyAudio
 import com.coolappstore.evercallrecorder.by.svhp.integrations.scrcpy.ScrcpyAudioSource
 import com.coolappstore.evercallrecorder.by.svhp.integrations.scrcpy.ScrcpyConfig
 import com.coolappstore.evercallrecorder.by.svhp.integrations.scrcpy.ServerExtractor
+import com.coolappstore.evercallrecorder.by.svhp.services.screenrecorder.ScreenRecorderDrivers
 import com.coolappstore.evercallrecorder.by.svhp.utils.AppLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -86,41 +87,6 @@ class ShellService : IShellService.Stub {
          * frame if the server is encoding when the stop request arrives.
          */
         const val PROCESS_STOP_GRACE_PERIOD_SEC = 2L
-
-        // ── Samsung system screen recorder automation (see docs/SHIZUKU_SYSTEM_RECORD.md) ──
-
-        /** Package of Samsung's Smart Capture / Screen Recorder. */
-        const val SAMSUNG_CAPTURE_PACKAGE = "com.samsung.android.app.smartcapture"
-
-        /** QS tile component that starts/stops Samsung's screen recorder (phone variant). */
-        const val SAMSUNG_RECORDER_TILE = "$SAMSUNG_CAPTURE_PACKAGE/com.samsung.android.app.screenrecorder.view.RecordScreenTile"
-
-        /** Directory where Samsung's screen recorder writes its mp4 files. Readable by shell. */
-        const val SAMSUNG_RECORDINGS_DIR = "/sdcard/DCIM/Screen recordings"
-
-        /** Max time to wait for the media projection session to appear/disappear after a tile click. */
-        const val SCREEN_RECORD_STATE_TIMEOUT_MS = 15_000L
-
-        /** Poll interval while waiting for the media projection state to change. */
-        const val SCREEN_RECORD_STATE_POLL_MS = 250L
-
-        /** Max time to wait for the recorder confirmation dialog to gain window focus after the tile click. */
-        const val SCREEN_RECORD_DIALOG_TIMEOUT_MS = 6_000L
-
-        /** Poll interval while waiting for the confirmation dialog window to appear. */
-        const val SCREEN_RECORD_DIALOG_POLL_MS = 200L
-
-        /** Temp path for the uiautomator UI dump used to locate the dialog's positive button. */
-        const val UI_DUMP_PATH = "/sdcard/ui.xml"
-
-        /** Resource-id of the recorder dialog's positive ("Start recording") button. Locale-safe. */
-        const val DIALOG_BUTTON_RESOURCE_ID = "android:id/button1"
-
-        /** Fallback text of the dialog's positive button (localized — used only if the id is absent). */
-        const val DIALOG_BUTTON_FALLBACK_TEXT = "Start recording"
-
-        /** Resource id of the "Media and mic" audio option (clickable container) in the recorder dialog. */
-        const val DIALOG_AUDIO_MEDIA_AND_MIC_ID = "radio_button_sound_all"
     }
 
     /**
@@ -364,311 +330,41 @@ class ShellService : IShellService.Stub {
     /** Returns whether a recording session is currently active (thread-safe via AtomicBoolean). */
     override fun isRecording(): Boolean = isRecordingActive.get()
 
-    // ── Samsung system screen recorder automation ─────────────────────────────────────────
+    // ── System screen recorder automation ────────────────────────────────────────────────
     //
-    // Ports docs/record.sh into the shell process. The direct service path is permission-gated
-    // (signatureOrSystem), so we drive the Quick Settings tile instead: SystemUI performs the
-    // click with its own privileges. The "Start recording" confirmation dialog is accepted
-    // shell-side too: wait for the dialog window focus, then a single `uiautomator dump`,
-    // parse the positive button's bounds and `input tap` its center.
+    // All vendor-specific logic lives in the ScreenRecorderDriver implementations under
+    // services/screenrecorder/. These AIDL methods only resolve the driver for the given
+    // backendKey and delegate.
 
-    /**
-     * Runs a shell command line in this shell process and returns its combined stdout.
-     * The output and exit code are always logged: these commands drive the screen recorder
-     * flow and their failures are otherwise invisible.
-     * @return The command output, or null if the command could not be executed.
-     */
-    private fun execShellCommand(command: String): String? {
-        return try {
-            val process = ProcessBuilder("sh", "-c", command).apply {
-                // The Shizuku user-service process may inherit a minimal environment; make sure
-                // the standard tool directories are on PATH for `cmd`, `settings`, `dumpsys`, `input`.
-                environment()["PATH"] = "/system/bin:/system/xbin:/product/bin:/apex/com.android.art/bin:" +
-                    (environment()["PATH"] ?: "")
-                redirectErrorStream(true)
-            }.start()
-            val output = process.inputStream.bufferedReader().readText()
-            val exitCode = process.waitFor()
-            AppLogger.d(TAG, "execShellCommand('$command') exit=$exitCode output='${output.trim().take(300)}'")
-            output
-        } catch (e: Exception) {
-            AppLogger.w(TAG, "execShellCommand('$command') failed: ${e.message}")
-            null
-        }
-    }
-
-    /**
-     * True while `dumpsys media_projection` reports an active session owned by smartcapture.
-     * An idle system prints "null" right after the "Media Projection:" header.
-     */
-    override fun isScreenRecordingActive(): Boolean {
-        val dump = execShellCommand("dumpsys media_projection") ?: return false
-        return dump.contains(SAMSUNG_CAPTURE_PACKAGE)
-    }
-
-    /**
-     * Ensures the Screen recorder tile is present in the Quick Settings layout.
-     * `cmd statusbar click-tile` silently no-ops when the user removed the tile.
-     * Checked only once per shell-process lifetime to keep session starts fast.
-     */
-    private var recorderTileEnsured = false
-
-    private fun ensureRecorderTilePresent() {
-        if (recorderTileEnsured) return
-        val spec = "custom($SAMSUNG_RECORDER_TILE)"
-        val current = execShellCommand("settings get secure sysui_qs_tiles")?.trim().orEmpty()
-        if (spec !in current) {
-            AppLogger.i(TAG, "Screen recorder tile missing from QS layout, appending it")
-            execShellCommand("settings put secure sysui_qs_tiles \"$current,$spec\"")
-            Thread.sleep(1000)
-        }
-        recorderTileEnsured = true
-    }
-
-    /**
-     * Waits for Samsung's recorder confirmation dialog and taps its positive button.
-     *
-     * Instead of a separate `dumpsys window` focus poll followed by a single dump (record.sh
-     * style), this loops `uiautomator dump` directly: on the fast path the dialog is already in
-     * the first dump (~0.5–1 s saved per start). Matches the button by resource-id first
-     * (locale-safe), with the (localized) text as a fallback.
-     *
-     * Bounds-parsing pitfall (docs/SHIZUKU_SYSTEM_RECORD.md): numbers must be extracted ONLY
-     * from the `bounds="[x1,y1][x2,y2]"` attribute of the SAME node tag that carries the id —
-     * a naive `[0-9]+` over the whole document picks up the stray `1` from `android:id/button1`
-     * and offsets the tap.
-     *
-     * @return true if the button appeared and was tapped within the timeout.
-     */
-    private fun confirmRecorderDialogWhenItAppears(): Boolean {
-        val deadline = System.currentTimeMillis() + SCREEN_RECORD_DIALOG_TIMEOUT_MS
-        while (System.currentTimeMillis() < deadline) {
-            execShellCommand("uiautomator dump $UI_DUMP_PATH")
-            val xml = execShellCommand("cat $UI_DUMP_PATH")
-            if (xml != null) {
-                val nodeTags = Regex("<node[^>]*>").findAll(xml).map { it.value }
-
-                // The "Media and mic" audio option must be selected, otherwise the recording is
-                // silent on one or both sides. The checked state lives on the child RadioButton
-                // (the node right after the option's container in document order); the container
-                // is the clickable one. If it is not selected, tap it and re-verify on the next
-                // loop iteration before tapping Start.
-                val audioTag = nodeTags.firstOrNull { it.contains("resource-id=\"$SAMSUNG_CAPTURE_PACKAGE:id/$DIALOG_AUDIO_MEDIA_AND_MIC_ID\"") }
-                if (audioTag != null && !isMediaAndMicSelected(xml)) {
-                    val bounds = Regex("bounds=\"\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]\"").find(audioTag)
-                    if (bounds != null) {
-                        val (x1, y1, x2, y2) = bounds.destructured
-                        val cx = (x1.toInt() + x2.toInt()) / 2
-                        val cy = (y1.toInt() + y2.toInt()) / 2
-                        AppLogger.i(TAG, "'Media and mic' not selected, tapping it at ($cx, $cy)")
-                        execShellCommand("input tap $cx $cy")
-                        Thread.sleep(SCREEN_RECORD_DIALOG_POLL_MS)
-                        continue
-                    }
-                    AppLogger.w(TAG, "Could not locate 'Media and mic' option bounds, proceeding with current audio setting")
-                }
-
-                val buttonTag = nodeTags.firstOrNull { it.contains("resource-id=\"$DIALOG_BUTTON_RESOURCE_ID\"") }
-                    ?: nodeTags.firstOrNull { it.contains("text=\"$DIALOG_BUTTON_FALLBACK_TEXT\"") }
-                if (buttonTag != null) {
-                    val bounds = Regex("bounds=\"\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]\"").find(buttonTag)
-                    if (bounds == null) {
-                        AppLogger.w(TAG, "No bounds attribute on the recorder dialog button node")
-                        return false
-                    }
-                    val (x1, y1, x2, y2) = bounds.destructured
-                    val cx = (x1.toInt() + x2.toInt()) / 2
-                    val cy = (y1.toInt() + y2.toInt()) / 2
-                    AppLogger.i(TAG, "Tapping recorder dialog positive button at ($cx, $cy)")
-                    execShellCommand("input tap $cx $cy")
-                    return true
-                }
-            }
-            Thread.sleep(SCREEN_RECORD_DIALOG_POLL_MS)
-        }
-        AppLogger.w(TAG, "Recorder dialog positive button never appeared (device locked?)")
-        return false
-    }
-
-    /**
-     * True when the recorder dialog's "Media and mic" option is currently selected.
-     * The option container ($DIALOG_AUDIO_MEDIA_AND_MIC_ID) is not itself checkable; the state
-     * is on the child `android.widget.RadioButton` node that follows it in document order.
-     * Defaults to true when the structure is not recognized so we never block the recording.
-     */
-    private fun isMediaAndMicSelected(xml: String): Boolean {
-        val idPos = xml.indexOf(DIALOG_AUDIO_MEDIA_AND_MIC_ID)
-        if (idPos < 0) return true
-        val after = xml.substring(idPos)
-        val radioTag = Regex("<node[^>]*RadioButton[^>]*>").find(after)?.value ?: return true
-        return radioTag.contains("checked=\"true\"")
-    }
-
-    /**
-     * Screen resolution as "WxH" parsed from `wm size`, cached per process. Used to tap the
-     * upper-center of the screen to skip Samsung's 3-second pre-recording countdown (verified
-     * on One UI 8 / Android 16: a tap during the countdown starts the session immediately,
-     * ~2.3 s saved).
-     */
-    private var cachedScreenCenter: Pair<Int, Int>? = null
-
-    private fun getCountdownSkipTapPoint(): Pair<Int, Int> {
-        cachedScreenCenter?.let { return it }
-        val size = execShellCommand("wm size")?.trim().orEmpty()
-        val match = Regex("(\\d+)x(\\d+)").find(size)
-        val point = if (match != null) {
-            val (w, h) = match.destructured
-            // Screen center: verified on-device that only center taps skip the countdown
-            // (upper-third taps were ignored by the overlay). Center of an in-call screen is
-            // the contact/avatar area, so a stray pass-through tap is harmless there.
-            Pair(w.toInt() / 2, h.toInt() / 2)
-        } else {
-            Pair(720, 1560) // Center fallback for 1440x3120-class devices.
-        }
-        cachedScreenCenter = point
-        return point
-    }
-
-    /**
-     * Sends taps that skip Samsung's ~3 s pre-recording countdown (verified on-device:
-     * ~1.4 s vs ~3.7 s to projection-active). Multiple spaced taps because the overlay's
-     * appearance time varies — a single tap can land before it is touchable. Best-effort:
-     * if all taps miss, the countdown simply runs its course and the projection poll below
-     * still catches the session start.
-     */
-    private fun skipRecorderCountdown() {
-        val (x, y) = getCountdownSkipTapPoint()
-        repeat(3) { attempt ->
-            Thread.sleep(350)
-            AppLogger.d(TAG, "Tapping ($x, $y) to skip the recorder countdown (attempt ${attempt + 1})")
-            execShellCommand("input tap $x $y")
-        }
-    }
-
-    /**
-     * Starts Samsung's screen recorder: wake screen, ensure tile, click tile, wait for the
-     * confirmation dialog, tap its positive button, then poll `dumpsys media_projection` until
-     * the recorder session is active. May block up to ~20 s total.
-     *
-     * Safety: refuses to click when a session is already active, because the tile toggles —
-     * clicking would STOP the user's own ongoing screen recording instead.
-     *
-     * @return true if the projection session became active within the timeout.
-     */
-    override fun startScreenRecording(): Boolean {
-        if (isScreenRecordingActive()) {
-            AppLogger.w(TAG, "startScreenRecording() refused: a screen recording is already active (tile toggles, clicking would stop it)")
+    override fun startScreenRecording(backendKey: String): Boolean {
+        val driver = ScreenRecorderDrivers.forKey(backendKey) ?: run {
+            AppLogger.w(TAG, "startScreenRecording: unknown screen recorder backend '$backendKey'")
             return false
         }
+        return driver.startRecording()
+    }
 
-        // Best-effort screen wake. If the keyguard is still locked the dialog never gains focus
-        // and the waits below time out.
-        execShellCommand("input keyevent KEYCODE_WAKEUP")
-
-        ensureRecorderTilePresent()
-
-        AppLogger.i(TAG, "Clicking screen recorder tile")
-        execShellCommand("cmd statusbar click-tile $SAMSUNG_RECORDER_TILE")
-
-        if (!confirmRecorderDialogWhenItAppears()) {
-            AppLogger.w(TAG, "Failed to confirm the recorder dialog")
+    override fun stopScreenRecording(backendKey: String): Boolean {
+        val driver = ScreenRecorderDrivers.forKey(backendKey) ?: run {
+            AppLogger.w(TAG, "stopScreenRecording: unknown screen recorder backend '$backendKey'")
             return false
         }
-
-        skipRecorderCountdown()
-
-        val deadline = System.currentTimeMillis() + SCREEN_RECORD_STATE_TIMEOUT_MS
-        while (System.currentTimeMillis() < deadline) {
-            if (isScreenRecordingActive()) {
-                AppLogger.i(TAG, "Screen recorder session is active")
-                return true
-            }
-            Thread.sleep(SCREEN_RECORD_STATE_POLL_MS)
-        }
-        AppLogger.w(TAG, "Timed out waiting for the screen recorder session to become active")
-        return false
+        return driver.stopRecording()
     }
 
-    /**
-     * Stops Samsung's screen recorder via the same tile (it toggles), then verifies the session
-     * actually ended. Never clicks when no session is active, so it can never START a recording.
-     *
-     * @return true if no session is active when this method returns (stopped or never ran).
-     */
-    override fun stopScreenRecording(): Boolean {
-        if (!isScreenRecordingActive()) {
-            AppLogger.d(TAG, "stopScreenRecording(): no active session, nothing to stop")
-            return true
-        }
-
-        AppLogger.i(TAG, "Clicking screen recorder tile to stop the session")
-        execShellCommand("cmd statusbar click-tile $SAMSUNG_RECORDER_TILE")
-
-        val deadline = System.currentTimeMillis() + SCREEN_RECORD_STATE_TIMEOUT_MS
-        while (System.currentTimeMillis() < deadline) {
-            if (!isScreenRecordingActive()) {
-                AppLogger.i(TAG, "Screen recorder session stopped")
-                return true
-            }
-            Thread.sleep(SCREEN_RECORD_STATE_POLL_MS)
-        }
-        AppLogger.w(TAG, "Screen recorder session still active after stop click")
-        return false
+    override fun isScreenRecordingActive(backendKey: String): Boolean {
+        val driver = ScreenRecorderDrivers.forKey(backendKey) ?: return false
+        return driver.isRecordingActive()
     }
 
-    /**
-     * Finds the newest finalized recording in [SAMSUNG_RECORDINGS_DIR] with mtime >= [minEpochSec].
-     * Hidden ".pending-*.mp4" files are skipped: Samsung writes the recording under that name
-     * while finalizing and renames it to the final name only once the file is complete.
-     */
-    private fun findLatestScreenRecording(minEpochSec: Long): File? {
-        return File(SAMSUNG_RECORDINGS_DIR).listFiles()
-            ?.filter { it.isFile && !it.name.startsWith(".") && it.extension.equals("mp4", ignoreCase = true) && it.lastModified() / 1000 >= minEpochSec }
-            ?.maxByOrNull { it.lastModified() }
+    override fun openLatestScreenRecording(backendKey: String, minEpochSec: Long): ParcelFileDescriptor? {
+        val driver = ScreenRecorderDrivers.forKey(backendKey) ?: return null
+        return driver.openLatestRecording(minEpochSec)
     }
 
-    /**
-     * Opens the newest file in [SAMSUNG_RECORDINGS_DIR] with mtime >= [minEpochSec] and returns
-     * a read-only FD for it. The mtime guard prevents reporting an older, unrelated recording.
-     *
-     * @return A read-only [ParcelFileDescriptor], or null if no matching file exists.
-     */
-    override fun openLatestScreenRecording(minEpochSec: Long): ParcelFileDescriptor? {
-        val newest = findLatestScreenRecording(minEpochSec)
-        if (newest == null) {
-            AppLogger.w(TAG, "No new screen recording found in $SAMSUNG_RECORDINGS_DIR (minEpochSec=$minEpochSec)")
-            return null
-        }
-        return try {
-            AppLogger.i(TAG, "Opening recorded file: ${newest.absolutePath} (${newest.length()} bytes)")
-            ParcelFileDescriptor.open(newest, ParcelFileDescriptor.MODE_READ_ONLY)
-        } catch (e: Exception) {
-            AppLogger.e(TAG, "Failed to open ${newest.absolutePath}", e)
-            null
-        }
-    }
-
-    /**
-     * Deletes the newest finalized recording with mtime >= [minEpochSec] (same selection rule as
-     * [openLatestScreenRecording]). Used to remove the source video after its audio track was
-     * successfully imported into the app library.
-     *
-     * @return true if a file was deleted.
-     */
-    override fun deleteLatestScreenRecording(minEpochSec: Long): Boolean {
-        val newest = findLatestScreenRecording(minEpochSec) ?: return false
-        return try {
-            val deleted = newest.delete()
-            if (deleted) {
-                AppLogger.i(TAG, "Deleted source screen recording: ${newest.absolutePath}")
-            } else {
-                AppLogger.w(TAG, "Failed to delete source screen recording: ${newest.absolutePath}")
-            }
-            deleted
-        } catch (e: Exception) {
-            AppLogger.e(TAG, "Error deleting ${newest.absolutePath}", e)
-            false
-        }
+    override fun deleteLatestScreenRecording(backendKey: String, minEpochSec: Long): Boolean {
+        val driver = ScreenRecorderDrivers.forKey(backendKey) ?: return false
+        return driver.deleteLatestRecording(minEpochSec)
     }
 
     /**

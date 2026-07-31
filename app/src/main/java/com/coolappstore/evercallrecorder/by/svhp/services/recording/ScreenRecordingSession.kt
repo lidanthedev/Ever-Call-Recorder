@@ -48,7 +48,8 @@ import java.nio.ByteBuffer
 class ScreenRecordingSession(
     private val context: Context,
     private val shellService: IShellService,
-    private val metadata: RecordingMetadata
+    private val metadata: RecordingMetadata,
+    private val backendKey: String
 ) {
     companion object {
         private const val TAG = "SCR:ScreenRecordingSession"
@@ -80,7 +81,7 @@ class ScreenRecordingSession(
      */
     suspend fun start() {
         withContext(Dispatchers.IO) {
-            if (runCatching { shellService.isScreenRecordingActive }.getOrDefault(false)) {
+            if (runCatching { shellService.isScreenRecordingActive(backendKey) }.getOrDefault(false)) {
                 throw PipelineInitializationException(
                     userFriendlyMessage = context.getString(R.string.recording_error_screen_recorder_busy),
                     technicalLogMessage = "A screen recording is already active; refusing to click the toggling tile"
@@ -90,7 +91,7 @@ class ScreenRecordingSession(
             sessionStartEpochSec = System.currentTimeMillis() / 1000
 
             val started = try {
-                shellService.startScreenRecording()
+                shellService.startScreenRecording(backendKey)
             } catch (e: Exception) {
                 throw PipelineInitializationException(
                     userFriendlyMessage = context.getString(R.string.recording_error_start_failed),
@@ -120,7 +121,7 @@ class ScreenRecordingSession(
     suspend fun stopAndImport(): Uri? = withContext(Dispatchers.IO) {
         isActive = false
 
-        val stopped = runCatching { shellService.stopScreenRecording() }.getOrDefault(false)
+        val stopped = runCatching { shellService.stopScreenRecording(backendKey) }.getOrDefault(false)
         if (!stopped) {
             AppLogger.w(TAG, "Screen recorder did not confirm stop; attempting import anyway")
         }
@@ -157,7 +158,7 @@ class ScreenRecordingSession(
 
             // Optionally remove the source video from DCIM now that its audio is safely stored.
             if (preferences.isDeleteScreenRecordingAfterImportEnabled()) {
-                val deleted = runCatching { shellService.deleteLatestScreenRecording(sessionStartEpochSec) }.getOrDefault(false)
+                val deleted = runCatching { shellService.deleteLatestScreenRecording(backendKey, sessionStartEpochSec) }.getOrDefault(false)
                 if (!deleted) {
                     AppLogger.w(TAG, "Source screen recording could not be deleted; it remains in DCIM/Screen recordings")
                 }
@@ -177,7 +178,7 @@ class ScreenRecordingSession(
     private suspend fun waitForNewRecordingFile(): ParcelFileDescriptor? {
         val deadline = System.currentTimeMillis() + FILE_APPEAR_TIMEOUT_MS
         while (System.currentTimeMillis() < deadline) {
-            val pfd = runCatching { shellService.openLatestScreenRecording(sessionStartEpochSec) }.getOrNull()
+            val pfd = runCatching { shellService.openLatestScreenRecording(backendKey, sessionStartEpochSec) }.getOrNull()
             if (pfd != null) return pfd
             delay(FILE_APPEAR_POLL_MS)
         }

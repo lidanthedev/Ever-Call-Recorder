@@ -263,11 +263,17 @@ class AudioRecordingEngine {
      * output directory during [releaseSuspend].
      */
     private suspend fun startScreenRecorderPipeline(context: Service, service: IShellService, metadata: RecordingMetadata) {
-        AppLogger.i(TAG, "Starting Samsung screen recorder pipeline for ${metadata.sourceApp} call")
+        val appsSource = ScrcpyAudioSource.fromKey(AppPreferences(context).getAppsAudioSource())
+        val backendKey = appsSource.screenRecorderBackendKey ?: throw PipelineInitializationException(
+            userFriendlyMessage = "Internal error",
+            technicalLogMessage = "startScreenRecorderPipeline called for '${appsSource.cliKey}' which has no screen recorder backend key"
+        )
+        AppLogger.i(TAG, "Starting screen recorder pipeline (backend='$backendKey') for ${metadata.sourceApp} call")
         val session = ScreenRecordingSession(
             context = context,
             shellService = service,
-            metadata = metadata
+            metadata = metadata,
+            backendKey = backendKey
         )
         session.start() // Throws PipelineInitializationException on any preflight/start failure.
         screenRecordingSession = session

@@ -2,9 +2,11 @@
 
 ## Implementation status
 
-**IMPLEMENTED in Kotlin.** Components: `services/recording/ScreenRecordingSession`,
-shell-side methods in `services/ShellService.kt`, and the `SAMSUNG_SCREEN_RECORDER` entry in
-`integrations/scrcpy/ScrcpyAudioSource`. Dialog confirmation uses **option B** below
+**IMPLEMENTED in Kotlin.** Components: `services/recording/ScreenRecordingSession` (app-side
+orchestrator), `services/screenrecorder/SamsungScreenRecorderDriver.kt` (shell-side automation,
+behind the vendor-agnostic `ScreenRecorderDriver` contract + `ScreenRecorderDrivers` registry;
+`IShellService` methods only delegate by `backendKey`), and the `SAMSUNG_SCREEN_RECORDER`
+entry in `integrations/scrcpy/ScrcpyAudioSource`. Dialog confirmation uses **option B** below
 (uiautomator-dump, matched by resource-id `android:id/button1` for locale-safety, text as
 fallback) — done entirely in the shell process as a dump-and-tap loop (no separate focus
 poll). Option A (AccessibilityService) was tried first and removed — the service connected
