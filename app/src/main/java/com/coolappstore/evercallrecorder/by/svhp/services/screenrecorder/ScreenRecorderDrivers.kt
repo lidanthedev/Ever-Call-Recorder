@@ -23,8 +23,15 @@ package com.coolappstore.evercallrecorder.by.svhp.services.screenrecorder
  */
 object ScreenRecorderDrivers {
 
-    private val registry: Map<String, () -> ScreenRecorderDriver> = mapOf(
-        "samsung" to { SamsungScreenRecorderDriver() }
+    /**
+     * Static registration metadata for a driver. [recorderPackage] duplicates the driver's
+     * own `recorderPackage` so [forPackage] can reverse-match a package to its backend key
+     * WITHOUT instantiating unrelated drivers.
+     */
+    private data class DriverRegistration(val recorderPackage: String, val factory: () -> ScreenRecorderDriver)
+
+    private val registry: Map<String, DriverRegistration> = mapOf(
+        "samsung" to DriverRegistration(SamsungScreenRecorderDriver.SAMSUNG_CAPTURE_PACKAGE) { SamsungScreenRecorderDriver() }
     )
 
     /** Live driver instances. Drivers cache state (tile presence, screen size) that must
@@ -38,7 +45,7 @@ object ScreenRecorderDrivers {
     @Synchronized
     fun forKey(backendKey: String): ScreenRecorderDriver? {
         instances[backendKey]?.let { return it }
-        val created = registry[backendKey]?.invoke() ?: return null
+        val created = registry[backendKey]?.factory?.invoke() ?: return null
         instances[backendKey] = created
         return created
     }
@@ -47,14 +54,12 @@ object ScreenRecorderDrivers {
      * Returns the driver whose [ScreenRecorderDriver.recorderPackage] matches [packageName],
      * or null when no registered backend owns that package. Used by the app-side
      * [ScreenRecorderAccessibilityService] to route window events to the right vendor driver.
-     * Instantiates drivers lazily as needed; instances are shared with [forKey].
+     * The package is matched against the static registration metadata first, so only the
+     * matching driver is ever instantiated; instances are shared with [forKey].
      */
     @Synchronized
     fun forPackage(packageName: String): ScreenRecorderDriver? {
-        for (key in registry.keys) {
-            val driver = forKey(key) ?: continue
-            if (driver.recorderPackage == packageName) return driver
-        }
-        return null
+        val matchingKey = registry.entries.firstOrNull { it.value.recorderPackage == packageName }?.key ?: return null
+        return forKey(matchingKey)
     }
 }

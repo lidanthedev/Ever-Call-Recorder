@@ -1,4 +1,4 @@
-# Handoff: Samsung Screen Recorder Automation via Shizuku
+# Samsung Screen Recorder Automation via Shizuku
 
 ## Implementation status
 
@@ -217,7 +217,7 @@ Ground truth for the Kotlin port (formerly `docs/record.sh`, inlined here):
 ```bash
 #!/bin/bash
 # Record screen for N seconds on Samsung device via smartcapture QS tile.
-# Usage: ./record.sh [seconds]   (default 10)
+# Usage: copy this block into a file (e.g. record.sh), then: ./record.sh [seconds]   (default 10)
 
 DURATION="${1:-10}"
 PKG=com.samsung.android.app.smartcapture
@@ -271,23 +271,41 @@ if adb shell dumpsys media_projection | grep -q "^null"; then
     exit 1
 fi
 echo "[+] recording active"
+OUR_RECORDING=1
+
+# --- abnormal exit: attempt to stop the projection WE started (never a pre-existing one)
+cleanup() {
+    if [ "$OUR_RECORDING" = "1" ] && ! adb shell dumpsys media_projection | grep -q "^null"; then
+        echo "[*] exit cleanup: attempting to stop the active projection"
+        adb shell cmd statusbar click-tile "$TILE"
+    fi
+}
+trap cleanup EXIT
 
 echo "[*] recording ${DURATION}s..."
 sleep "$DURATION"
 
 echo "[*] stopping"
-adb shell cmd statusbar click-tile "$TILE"
-sleep 3
-
-if adb shell dumpsys media_projection | grep -q "^null"; then
+STOPPED=0
+for attempt in 1 2 3; do
+    adb shell cmd statusbar click-tile "$TILE"
+    sleep 3
+    if adb shell dumpsys media_projection | grep -q "^null"; then
+        STOPPED=1
+        break
+    fi
+    echo "[!] projection still active (attempt $attempt), retrying stop..."
+done
+if [ "$STOPPED" -eq 1 ]; then
     echo "[+] recording stopped"
 else
-    echo "[!] projection still active, stop failed"
+    echo "[!] projection still active after retries, stop failed"
     exit 1
 fi
 
-# --- report only files created after script start
-NEWEST=$(adb shell "ls -t /sdcard/DCIM/Screen\ recordings/ | head -1" | tr -d '\r')
+# --- report only finalized files created after script start (skip hidden .pending-*.mp4;
+# plain `ls` already hides dotfiles, the .mp4 filter keeps non-recording entries out)
+NEWEST=$(adb shell "ls -t /sdcard/DCIM/Screen\ recordings/ | grep '\.mp4$' | head -1" | tr -d '\r')
 MTIME=$(adb shell "stat -c %Y \"/sdcard/DCIM/Screen recordings/$NEWEST\" 2>/dev/null" | tr -d '\r')
 if [ -n "$MTIME" ] && [ "$MTIME" -ge "$START_TS" ]; then
     echo "[+] saved: /sdcard/DCIM/Screen recordings/$NEWEST"
@@ -308,5 +326,5 @@ in the first dump) and matches by resource-id, not the localized `text=` used he
 | Tile present, screen on, unlocked | dialog → confirm → recording |
 | Tile missing from QS layout | auto-append to `sysui_qs_tiles`, then works |
 | Screen locked | abort early with clear error |
-| Already recording (start call) | tile click STOPS it — check state first! |
-| Stop when not recording | tile click STARTS (opens dialog) — check state first! |
+| Already recording (start call) | `ScreenRecorderDriver.startRecording()` busy-guard rejects BEFORE any tile click (triggers toggle) → start fails with `recording_error_screen_recorder_busy`; user's own session keeps running |
+| Stop when not recording | `stopRecording()` sees no active session and no-ops (returns success) — no tile click is ever fired, so it cannot START a recording |
