@@ -274,7 +274,7 @@
     <string name="settings_screen_recorder_confirm_uiautomator">uiautomator dump (shell)</string>
     <string name="settings_screen_recorder_confirm_uiautomator_desc">Works everywhere, no extra permission. Slow: each dump takes 2–5 s.</string>
     <string name="settings_screen_recorder_confirm_accessibility">Accessibility service (fast)</string>
-    <string name="settings_screen_recorder_confirm_accessibility_desc">Fastest (~10 ms). Requires enabling our accessibility service; the 3 s countdown cannot be skipped.</string>
+    <string name="settings_screen_recorder_confirm_accessibility_desc">Fastest (~10 ms). Requires enabling our accessibility service</string>
     <string name="settings_screen_recorder_a11y_disabled_warning">Accessibility service is not enabled. It will fall back to uiautomator until you enable it.</string>
     <string name="settings_screen_recorder_a11y_open_settings">Open accessibility settings</string>
     <string name="screen_recorder_a11y_service_description">Confirms the screen recorder\'s "Start recording" dialog automatically when recording app calls. Only watches the Samsung Screen Recorder app.</string>
