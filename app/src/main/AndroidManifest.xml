@@ -110,6 +110,24 @@
             </intent-filter>
         </service>
 
+        <!--
+             Confirms Samsung's screen recorder "Start recording" dialog in-memory (fast path),
+             replacing the shell-side uiautomator dump. Only active when the user enables it in
+             system Accessibility settings AND picks "Accessibility service" as the confirmation
+             method (see Settings > Recording); otherwise the uiautomator path is used.
+        -->
+        <service
+            android:name=".services.screenrecorder.ScreenRecorderAccessibilityService"
+            android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/screen_recorder_accessibility_service" />
+        </service>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.provider"

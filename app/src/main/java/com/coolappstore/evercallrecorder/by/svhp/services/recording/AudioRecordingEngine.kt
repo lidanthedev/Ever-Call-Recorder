@@ -56,6 +56,14 @@ class AudioRecordingEngine {
     /** Writes scrcpy decoded audio packets into the output container (OPUS/AAC). */
     var scrcpyAudioMuxer: ScrcpyAudioMuxer? = null
 
+    /**
+     * Non-null when this session uses the "Samsung Screen Recorder" backend instead of the
+     * scrcpy pipeline (see [ScrcpyAudioSource.SAMSUNG_SCREEN_RECORDER]). In that mode none of the
+     * scrcpy fields above are used: the system recorder captures the call and the resulting file
+     * is imported on [release].
+     */
+    var screenRecordingSession: ScreenRecordingSession? = null
+
     /** Metadata captured during the [startPipeline] and locked. Used for checks in [release] if we need to query call logs for the final file name if phone number is empty. */
     var initializationMetadata: RecordingMetadata? = null
         set(value) {
@@ -112,9 +120,11 @@ class AudioRecordingEngine {
 
     /**
      * Orchestrates the initialization and connection of the entire recording pipeline.
+     * Suspends: the Samsung screen-recorder backend blocks for several seconds while the shell
+     * process polls the recorder state, so callers must invoke this off the main thread.
      * @throws PipelineInitializationException if any step of the initialization fails, with details for user-friendly and technical error reporting.
      */
-    fun startPipeline(context: Service, service: IShellService, metadata: RecordingMetadata) {
+    suspend fun startPipeline(context: Service, service: IShellService, metadata: RecordingMetadata) {
         initializationMetadata = metadata
         val preferences = AppPreferences(context)
 
@@ -129,20 +139,29 @@ class AudioRecordingEngine {
         val bitRate = preferences.getAudioBitRate().takeIf { it > 0 } ?: codecEnum.defaultBitRate
 
         // Calls placed through messaging apps (WhatsApp/Telegram) are VoIP, not telephony: there is no
-        // modem-level VOICE_CALL tap for them. We force OUTPUT (REMOTE_SUBMIX) instead, regardless of the
-        // user's normal phone-call audio source preference. Both PLAYBACK and MIC-family sources were tried
-        // and produced silent recordings: PLAYBACK (AudioPlaybackCaptureConfiguration) hard-excludes audio
-        // tagged AudioAttributes.USAGE_VOICE_COMMUNICATION — exactly how these apps tag call audio — at the
-        // platform level, regardless of caller privilege; and any MIC-class source competes with the app's
-        // own concurrent microphone session for the call, which Android silences for privacy. OUTPUT avoids
-        // both problems: it's a privileged, CAPTURE_AUDIO_OUTPUT-gated system mix tap (the same permission
-        // class as VOICE_CALL, which already works reliably for normal calls), not a microphone capture, and
-        // it predates the USAGE_VOICE_COMMUNICATION exclusion that was only added for the newer Playback
-        // Capture API. See "Record calls from apps" in Settings.
+        // modem-level VOICE_CALL tap for them, so they use the separate "Apps audio source" setting.
+        // Its default, OUTPUT (REMOTE_SUBMIX), was chosen because both PLAYBACK and MIC-family sources
+        // produced silent recordings: PLAYBACK (AudioPlaybackCaptureConfiguration) hard-excludes audio
+        // tagged AudioAttributes.USAGE_VOICE_COMMUNICATION — exactly how these apps tag call audio — at
+        // the platform level, regardless of caller privilege; and any MIC-class source competes with the
+        // app's own concurrent microphone session for the call, which Android silences for privacy.
+        // OUTPUT avoids both problems: it's a privileged, CAPTURE_AUDIO_OUTPUT-gated system mix tap (the
+        // same permission class as VOICE_CALL, which already works reliably for normal calls), not a
+        // microphone capture, and it predates the USAGE_VOICE_COMMUNICATION exclusion that was only
+        // added for the newer Playback Capture API. The alternative "Samsung Screen Recorder" apps
+        // source is NOT a scrcpy source at all: the system screen recorder captures the call and we
+        // import its audio track at stop time (see ScreenRecordingSession).
+        // See "Record calls from apps" in Settings.
         val audioSourceEnum = if (metadata.sourceApp != null) {
-            AppLogger.i(TAG, "Session originates from app '${metadata.sourceApp}' — forcing OUTPUT audio source instead of the configured '${preferences.getAudioSource()}'")
-            ScrcpyAudioSource.OUTPUT
+            val appsSource = ScrcpyAudioSource.fromKey(preferences.getAppsAudioSource())
+            if (appsSource.isScreenRecorderBackend) {
+                startScreenRecorderPipeline(context, service, metadata, appsSource)
+                return
+            }
+            AppLogger.i(TAG, "Session originates from app '${metadata.sourceApp}' — using apps audio source '${appsSource.cliKey}'")
+            appsSource
         } else {
+            // getAudioSource() is already sanitized: it can never return a screen-recorder backend.
             ScrcpyAudioSource.fromKey(preferences.getAudioSource())
         }
 
@@ -239,25 +258,63 @@ class AudioRecordingEngine {
     }
 
     /**
+     * Starts the "Samsung Screen Recorder" backend instead of the scrcpy pipeline.
+     * No output file is created here — the recording is imported from the system recorder's
+     * output directory during [releaseSuspend].
+     *
+     * @param appsSource The already-resolved apps audio source (screen-recorder backend),
+     * passed by [startPipeline] so its backend key is not resolved from preferences twice.
+     */
+    private suspend fun startScreenRecorderPipeline(context: Service, service: IShellService, metadata: RecordingMetadata, appsSource: ScrcpyAudioSource) {
+        val backendKey = appsSource.screenRecorderBackendKey ?: throw PipelineInitializationException(
+            userFriendlyMessage = context.getString(R.string.recording_unexpected_error),
+            technicalLogMessage = "startScreenRecorderPipeline called for '${appsSource.cliKey}' which has no screen recorder backend key"
+        )
+        AppLogger.i(TAG, "Starting screen recorder pipeline (backend='$backendKey') for ${metadata.sourceApp} call")
+        val session = ScreenRecordingSession(
+            context = context,
+            shellService = service,
+            metadata = metadata,
+            backendKey = backendKey
+        )
+        session.start() // Throws PipelineInitializationException on any preflight/start failure.
+        screenRecordingSession = session
+        currentCodecEnum = ScrcpyAudioCodec.AAC // The imported recording is an .m4a (AAC track).
+    }
+
+    /**
      * Safely releases all held resources in the correct order.
      * Everything is wrapped in runCatching to ignore any exceptions and continue the cleanup.
      *
      * 1. Stops the remote shell service process natively, which gives scrcpy-server a grace period
      *    to write its final audio bytes before closing the pipe from the sender side.
+     *    (Screen recorder backend: clicks the tile to stop, then imports the recording and
+     *    extracts its audio track into the configured storage.)
      * 2. Waits for the local reading coroutine to reach EOF and finish parsing the late bytes.
      * 3. Cancels the active reading coroutine and scrcpy client as a fallback.
      * 4. Closes the inbound pipe.
      * 5. Closes the muxer and output file descriptor to finalize the container header.
      */
-    fun release(shellService: IShellService?) {
+    suspend fun releaseSuspend(shellService: IShellService?) {
         AppLogger.i(TAG, "Releasing session resources and recording pipeline...")
+        val session = screenRecordingSession
+        if (session != null) {
+            runCatching {
+                currentRecordingUri = session.stopAndImport()
+                if (currentRecordingUri == null) {
+                    AppLogger.w(TAG, "Screen recording import returned no file; the mp4 (if any) remains in DCIM/Screen recordings")
+                }
+            }.onFailure {
+                AppLogger.e(TAG, "Screen recording import failed with an exception; the mp4 (if any) remains in DCIM/Screen recordings", it)
+            }
+            screenRecordingSession = null
+        }
+
         runCatching { shellService?.stopRecording() }
 
         runCatching {
-            runBlocking {
-                withTimeoutOrNull(2000L) {
-                    audioPipeReadJob?.join()
-                }
+            withTimeoutOrNull(2000L) {
+                audioPipeReadJob?.join()
             }
         }
 
@@ -267,6 +324,16 @@ class AudioRecordingEngine {
         runCatching { scrcpyAudioMuxer?.close() }
         runCatching { outputPfd?.close() }
     }
+
+    /**
+     * Blocking variant of [releaseSuspend], for callers that cannot suspend (e.g. Service.onDestroy).
+     * Prefer [releaseSuspend] whenever a coroutine context is available.
+     *
+     * **Must not be called on the main thread for screen-recorder sessions**: the import can
+     * block for many seconds (stop polling + file transfer + audio extraction). Callers on the
+     * main thread must offload to [Dispatchers.IO] instead.
+     */
+    fun release(shellService: IShellService?) = runBlocking { releaseSuspend(shellService) }
 
     /**
      * Trigger the normal [release] flow, then followed by an attempt to delete the incomplete recording file if it was created

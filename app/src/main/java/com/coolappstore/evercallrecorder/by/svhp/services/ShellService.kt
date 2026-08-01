@@ -20,6 +20,7 @@ import com.coolappstore.evercallrecorder.by.svhp.integrations.scrcpy.ScrcpyAudio
 import com.coolappstore.evercallrecorder.by.svhp.integrations.scrcpy.ScrcpyAudioSource
 import com.coolappstore.evercallrecorder.by.svhp.integrations.scrcpy.ScrcpyConfig
 import com.coolappstore.evercallrecorder.by.svhp.integrations.scrcpy.ServerExtractor
+import com.coolappstore.evercallrecorder.by.svhp.services.screenrecorder.ScreenRecorderDrivers
 import com.coolappstore.evercallrecorder.by.svhp.utils.AppLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -28,6 +29,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.io.IOException
 import java.io.InterruptedIOException
@@ -134,6 +137,12 @@ class ShellService : IShellService.Stub {
      * We keep this [shellScope] job reference so we can wait for late bytes to be relayed when shutting down in [stopRecording].
      */
     private var audioPipeRelayJob: Job? = null
+
+    /**
+     * Mutex serializing screen recorder start/stop operations at the AIDL boundary.
+     * Prevents concurrent Binder calls from racing on the active-state check and trigger sequence.
+     */
+    private val screenRecorderMutex = Mutex()
 
     // ---- Shizuku-required constructors
 
@@ -328,6 +337,51 @@ class ShellService : IShellService.Stub {
 
     /** Returns whether a recording session is currently active (thread-safe via AtomicBoolean). */
     override fun isRecording(): Boolean = isRecordingActive.get()
+
+    // ── System screen recorder automation ────────────────────────────────────────────────
+    //
+    // All vendor-specific logic lives in the ScreenRecorderDriver implementations under
+    // services/screenrecorder/. These AIDL methods only resolve the driver for the given
+    // backendKey and delegate.
+
+    override fun startScreenRecording(backendKey: String, confirmMode: Int): Boolean {
+        return kotlinx.coroutines.runBlocking {
+            screenRecorderMutex.withLock {
+                val driver = ScreenRecorderDrivers.forKey(backendKey) ?: run {
+                    AppLogger.w(TAG, "startScreenRecording: unknown screen recorder backend '$backendKey'")
+                    return@runBlocking false
+                }
+                driver.startRecording(confirmMode)
+            }
+        }
+    }
+
+    override fun stopScreenRecording(backendKey: String): Boolean {
+        return kotlinx.coroutines.runBlocking {
+            screenRecorderMutex.withLock {
+                val driver = ScreenRecorderDrivers.forKey(backendKey) ?: run {
+                    AppLogger.w(TAG, "stopScreenRecording: unknown screen recorder backend '$backendKey'")
+                    return@runBlocking false
+                }
+                driver.stopRecording()
+            }
+        }
+    }
+
+    override fun isScreenRecordingActive(backendKey: String): Boolean {
+        val driver = ScreenRecorderDrivers.forKey(backendKey) ?: return false
+        return driver.isRecordingActive()
+    }
+
+    override fun openLatestScreenRecording(backendKey: String, minEpochSec: Long): ParcelFileDescriptor? {
+        val driver = ScreenRecorderDrivers.forKey(backendKey) ?: return null
+        return driver.openLatestRecording(minEpochSec)
+    }
+
+    override fun deleteLatestScreenRecording(backendKey: String, minEpochSec: Long): Boolean {
+        val driver = ScreenRecorderDrivers.forKey(backendKey) ?: return false
+        return driver.deleteLatestRecording(minEpochSec)
+    }
 
     /**
      * Called by Shizuku when it wants to shut down this user service.

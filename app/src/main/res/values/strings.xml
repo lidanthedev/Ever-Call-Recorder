@@ -152,6 +152,10 @@
     <string name="placeholder_app_source_desc">The originating app (e.g. WhatsApp), empty for normal calls</string>
 
     <!-- Settings Screen: Record calls from apps -->
+    <string name="settings_record_telephony_calls">Record phone calls</string>
+    <string name="settings_record_telephony_calls_desc">Master switch for regular SIM/telephony calls. Turn off if your phone already has a built-in call recorder and you only want app (VoIP) calls recorded.</string>
+    <string name="settings_delete_screen_recording_after_import">Delete screen recording after import</string>
+    <string name="settings_delete_screen_recording_after_import_desc">Removes the original video from DCIM/Screen recordings once its audio has been extracted into your library. Only used with the "Samsung Screen Recorder" audio source.</string>
     <string name="settings_app_call_recording_label">Record calls from apps</string>
     <string name="settings_app_call_recording_off">Off</string>
     <string name="settings_app_call_recording_dialog_title">Record Calls From Apps</string>
@@ -163,7 +167,7 @@
     <string name="app_call_target_whatsapp" translatable="false">WhatsApp</string>
     <string name="app_call_target_telegram" translatable="false">Telegram</string>
     <string name="recording_notification_via_app">Recording call via %1$s</string>
-    <string name="settings_app_call_recording_unavailable_message">This feature doesn\'t work right now</string>
+    <string name="settings_app_call_recording_unavailable_message">This feature is experimental and may not work on all devices or app versions. On Samsung devices, selecting the "Samsung Screen Recorder" audio source is recommended.</string>
 
     <string name="settings_auto_record_incoming">Automatically record incoming calls</string>
     <string name="settings_auto_record_outgoing">Automatically record outgoing calls</string>
@@ -204,6 +208,8 @@
     <string name="audio_bitrate_kbps" translatable="false">%1$d kbps</string>
 
     <string name="settings_audio_source">Audio source</string>
+    <string name="settings_apps_audio_source">Apps audio source</string>
+    <string name="audio_source_backend_not_available">Not available on this device (the required system screen recorder app is not installed).</string>
     <string name="audio_source_voice_comm" translatable="false">Voice communication mic</string>
     <string name="audio_source_voice_comm_description">Microphone audio source tuned for voice communications. Built-in echo cancellation.</string>
 
@@ -237,6 +243,9 @@
     <string name="audio_source_voice_performance" translatable="false">Voice performance</string>
     <string name="audio_source_voice_performance_description">High-speed microphone mode designed for live music and real-time audio apps.</string>
 
+    <string name="audio_source_samsung_screen_recorder" translatable="false">Samsung Screen Recorder</string>
+    <string name="audio_source_samsung_screen_recorder_description">Uses Samsung\'s built-in system screen recorder to capture WhatsApp/Telegram calls (works where direct capture fails, e.g. Android 16). The recorder confirmation dialog is accepted automatically via Shizuku. VoIP calls only; recordings are saved as audio-only .m4a files. Pause is not supported with this source.</string>
+
     <!-- Settings Screen: Debug Section -->
     <string name="settings_debug_logging_enabled">Enable log recording</string>
     <string name="settings_debug_logging_enabled_description">To report a bug, enable this, restart the app, and reproduce the issue.</string>
@@ -257,6 +266,18 @@
     <string name="settings_debug_action_ringing" translatable="false">Ringing</string>
     <string name="settings_debug_action_offhook" translatable="false">Off Hook</string>
     <string name="settings_debug_action_idle" translatable="false">Idle / End</string>
+    <string name="settings_debug_action_screen_recorder" translatable="false">Screen Recorder (5s)</string>
+    <string name="settings_debug_screen_recorder_starting" translatable="false">Starting screen recorder test (5s)…</string>
+    <string name="settings_debug_screen_recorder_success" translatable="false">Screen recorder test saved: %1$s</string>
+    <string name="settings_debug_screen_recorder_failed" translatable="false">Screen recorder test failed: %1$s</string>
+    <string name="settings_screen_recorder_confirm_mode">Recorder dialog confirmation</string>
+    <string name="settings_screen_recorder_confirm_uiautomator">uiautomator dump (shell)</string>
+    <string name="settings_screen_recorder_confirm_uiautomator_desc">Works everywhere, no extra permission. Slow: each dump takes 2–5 s.</string>
+    <string name="settings_screen_recorder_confirm_accessibility">Accessibility service (fast)</string>
+    <string name="settings_screen_recorder_confirm_accessibility_desc">Fastest (~10 ms). Requires enabling our accessibility service</string>
+    <string name="settings_screen_recorder_a11y_disabled_warning">Accessibility service is not enabled. It will fall back to uiautomator until you enable it.</string>
+    <string name="settings_screen_recorder_a11y_open_settings">Open accessibility settings</string>
+    <string name="screen_recorder_a11y_service_description">Confirms the screen recorder\'s "Start recording" dialog automatically when recording app calls. Only watches the Samsung Screen Recorder app.</string>
 
     <!-- Settings Screen: About/Server Section -->
     <string name="settings_copy_version">Copy Version</string>
@@ -298,6 +319,8 @@
     <string name="recording_error_server_missing">Scrcpy-server binary is missing or the security SHA256 check failed. This should not happen, please report this.</string>
     <string name="recording_error_file_creation">Failed to create recording file. Please check the storage permissions and/or select a new recording folder in the app settings.</string>
     <string name="recording_error_start_failed">Failed to start the recording. An error occurred when calling the ShellService binder method.</string>
+    <string name="recording_error_screen_recorder_busy">A screen recording is already in progress. Stop it first, then try again.</string>
+    <string name="recording_error_screen_recorder_start_failed">Screen recorder did not start. The confirmation dialog may not have appeared (device locked?) or the tile is unavailable.</string>
     <string name="recording_unexpected_error">An unexpected error occurred during recording. Please report this with the steps to reproduce and the apps logs.</string>
     <!-- Recording Service: Errors Shizuku -->
     <string name="recording_error_shizuku_disconnected_unexpectedly">Shizuku disconnected unexpectedly, causing the recording process to stop. (Shizuku-Server process died)</string>

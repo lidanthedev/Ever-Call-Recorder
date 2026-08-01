@@ -31,8 +31,9 @@ import kotlinx.parcelize.Parcelize
  * @param isEnriched **Enrichment**: A flag indicating whether enrichment has been attempted on this metadata instance.
  * @param sourceApp Non-null when this session comes from [com.coolappstore.evercallrecorder.by.svhp.services.call.AppCallNotificationListenerService]
  *                  instead of a normal telephony call, set to the originating app's display name (e.g. "WhatsApp").
- *                  Drives the forced [com.coolappstore.evercallrecorder.by.svhp.integrations.scrcpy.ScrcpyAudioSource.OUTPUT]
- *                  capture in [com.coolappstore.evercallrecorder.by.svhp.services.recording.AudioRecordingEngine] and the
+ *                  Drives use of the separate "Apps audio source" setting (OUTPUT or the Samsung
+ *                  screen-recorder backend) in
+ *                  [com.coolappstore.evercallrecorder.by.svhp.services.recording.AudioRecordingEngine] and the
  *                  filename prefix in [com.coolappstore.evercallrecorder.by.svhp.utils.RecordingFileNameFormatter].
  */
 @Parcelize

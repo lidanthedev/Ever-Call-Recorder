@@ -192,9 +192,14 @@ class CallSessionManager private constructor(context: Context) {
         // 1. Handle IDLE (Stop, no longer in a call)
         if (receivedCallState == TelephonyManager.CALL_STATE_IDLE) {
             sessionJob?.cancel()
-            if (session.isSessionActive) {
+            // Only send STOP when this session actually issued a service intent. Otherwise the
+            // STOP would pointlessly START the (not running) service — e.g. when telephony
+            // recording is disabled and evaluateAndStartService() returned early.
+            if (session.isSessionActive && session.wasRecordingServiceStartIntentSend) {
                 AppLogger.d(TAG, "Phone state is now idle (call ended). Sending stop INTENT for ${session.currentMetadata?.direction} call to RecordingForegroundService.")
                 sendServiceCommand(RecordingForegroundService.ACTION_STOP_RECORDING)
+            }
+            if (session.isSessionActive) {
                 session.clear()
             }
             return
@@ -273,6 +278,14 @@ class CallSessionManager private constructor(context: Context) {
             AppLogger.d(TAG, "Current call session has already sent a intent that started RecordingForegroundService. Skipping duplicate intent.")
             return
         }
+
+        // Master switch: telephony recording disabled entirely (e.g. user relies on a built-in
+        // phone recorder and only wants VoIP calls recorded). Neither START nor STANDBY is sent.
+        if (!preferences.isRecordTelephonyCallsEnabled()) {
+            AppLogger.i(TAG, "Telephony call recording is disabled in settings. Ignoring this phone call.")
+            return
+        }
+
         val sessionMetadata = session.currentMetadata ?: throw IllegalStateException("Metadata should have been determined by now. There is a logic error.")
 
         if (shouldAutoRecord(sessionMetadata)) {

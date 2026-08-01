@@ -43,6 +43,9 @@ class AppPreferences(context: Context) {
         const val DEBUG_ENABLED = false
         const val DEBUG_CALLER_NUMBER = ""
         val AUDIO_SOURCE = ScrcpyAudioSource.VOICE_CALL.cliKey
+        // VoIP (app) calls default to OUTPUT (remote submix) — the only scrcpy source that
+        // captured app-call audio before the Samsung screen-recorder backend existed.
+        val APPS_AUDIO_SOURCE = ScrcpyAudioSource.OUTPUT.cliKey
         val AUDIO_CODEC = ScrcpyAudioCodec.OPUS.cliKey
         val AUDIO_BITRATE = ScrcpyAudioCodec.OPUS.defaultBitRate
         const val FILE_NAME_TEMPLATE = "{date}_{direction}_{phone_number}"
@@ -72,6 +75,13 @@ class AppPreferences(context: Context) {
         // Record calls from apps defaults — both OFF (unticked) until the user opts in.
         const val RECORD_WHATSAPP_CALLS = false
         const val RECORD_TELEGRAM_CALLS = false
+        // Master switch for regular telephony call recording. ON by default (existing behavior);
+        // users with a built-in phone recorder (e.g. Samsung) can turn it off and record VoIP only.
+        const val RECORD_TELEPHONY_CALLS = true
+        // Whether to delete the source screen recording from DCIM after its audio was extracted.
+        const val DELETE_SCREEN_RECORDING_AFTER_IMPORT = false
+        // How the recorder's "Start recording" dialog is confirmed. Default: shell-side uiautomator.
+        val SCREEN_RECORDER_CONFIRM_MODE = ScreenRecorderConfirmMode.UIAUTOMATOR
     }
 
     enum class Key(val id: String) {
@@ -93,6 +103,7 @@ class AppPreferences(context: Context) {
         DEBUG_ENABLED("debug_enabled"),
         DEBUG_CALLER_NUMBER("debug_caller_number"),
         AUDIO_SOURCE("audio_source"),
+        APPS_AUDIO_SOURCE("apps_audio_source"),
         AUDIO_CODEC("audio_codec"),
         AUDIO_BITRATE("audio_bitrate"),
         FILE_NAME_TEMPLATE("file_name_template"),
@@ -117,7 +128,26 @@ class AppPreferences(context: Context) {
         APP_LOCK_SECRET_HASH("app_lock_secret_hash"),
         APP_LOCK_SALT("app_lock_salt"),
         RECORD_WHATSAPP_CALLS("record_whatsapp_calls"),
-        RECORD_TELEGRAM_CALLS("record_telegram_calls");
+        RECORD_TELEGRAM_CALLS("record_telegram_calls"),
+        RECORD_TELEPHONY_CALLS("record_telephony_calls"),
+        DELETE_SCREEN_RECORDING_AFTER_IMPORT("delete_screen_recording_after_import"),
+        SCREEN_RECORDER_CONFIRM_MODE("screen_recorder_confirm_mode");
+    }
+
+    /**
+     * How the Samsung screen recorder's "Start recording" confirmation dialog is handled.
+     *
+     * - [UIAUTOMATOR]   - shell-side `uiautomator dump` + `input tap` (works without any extra
+     *   permission, but each dump costs ~2-5 s).
+     * - [ACCESSIBILITY] - app-side [android.accessibilityservice.AccessibilityService] clicks the
+     *   dialog button in-memory (~ms). Requires the user to enable the service in system settings.
+     */
+    enum class ScreenRecorderConfirmMode(val key: String) {
+        UIAUTOMATOR("uiautomator"), ACCESSIBILITY("accessibility");
+        companion object {
+            fun fromKey(key: String?): ScreenRecorderConfirmMode =
+                entries.firstOrNull { it.key == key } ?: UIAUTOMATOR
+        }
     }
 
     enum class IgnoreContactsMode(val key: String) {
@@ -225,8 +255,38 @@ class AppPreferences(context: Context) {
     fun setDebugEnabled(enabled: Boolean) = setBoolean(Key.DEBUG_ENABLED, enabled)
     fun getDebugCallerNumber() = getString(Key.DEBUG_CALLER_NUMBER, DefaultsValue.DEBUG_CALLER_NUMBER) ?: DefaultsValue.DEBUG_CALLER_NUMBER
     fun setDebugCallerNumber(number: String) = setString(Key.DEBUG_CALLER_NUMBER, number)
-    fun getAudioSource() = getString(Key.AUDIO_SOURCE, DefaultsValue.AUDIO_SOURCE) ?: DefaultsValue.AUDIO_SOURCE
+    /**
+     * The audio source for regular phone (telephony) calls.
+     * Migration: builds from when this was a single shared dropdown may have stored the
+     * "samsung-screen-recorder" key here — that backend only applies to app calls, so the
+     * phone source is sanitized back to the [ScrcpyAudioSource.VOICE_CALL] default on read.
+     */
+    fun getAudioSource(): String {
+        val stored = getString(Key.AUDIO_SOURCE, DefaultsValue.AUDIO_SOURCE) ?: DefaultsValue.AUDIO_SOURCE
+        val isScreenRecorderKey = runCatching { ScrcpyAudioSource.fromKey(stored).isScreenRecorderBackend }.getOrDefault(false)
+        return if (isScreenRecorderKey) DefaultsValue.AUDIO_SOURCE else stored
+    }
     fun setAudioSource(source: String) = setString(Key.AUDIO_SOURCE, source)
+
+    /**
+     * The audio source for app (VoIP) calls — WhatsApp/Telegram etc. Only entries flagged
+     * [ScrcpyAudioSource.isAppsAudioSource] are offered (OUTPUT, SAMSUNG_SCREEN_RECORDER).
+     * Migration: builds from when this was a single shared dropdown stored the apps source in
+     * [Key.AUDIO_SOURCE]; honor that value when it is apps-capable and no dedicated key exists yet.
+     */
+    fun getAppsAudioSource(): String {
+        val stored = getString(Key.APPS_AUDIO_SOURCE, null)
+        if (stored != null) {
+            val isAppsSource = runCatching { ScrcpyAudioSource.fromKey(stored).isAppsAudioSource }.getOrDefault(false)
+            return if (isAppsSource) stored else DefaultsValue.APPS_AUDIO_SOURCE
+        }
+        val legacy = getString(Key.AUDIO_SOURCE, null)
+        if (legacy != null && runCatching { ScrcpyAudioSource.fromKey(legacy).isAppsAudioSource }.getOrDefault(false)) {
+            return legacy
+        }
+        return DefaultsValue.APPS_AUDIO_SOURCE
+    }
+    fun setAppsAudioSource(source: String) = setString(Key.APPS_AUDIO_SOURCE, source)
     fun getAudioCodec() = getString(Key.AUDIO_CODEC, DefaultsValue.AUDIO_CODEC) ?: DefaultsValue.AUDIO_CODEC
     fun setAudioCodec(codec: String) = setString(Key.AUDIO_CODEC, codec)
     fun getAudioBitRate() = getInt(Key.AUDIO_BITRATE, DefaultsValue.AUDIO_BITRATE)
@@ -336,4 +396,28 @@ class AppPreferences(context: Context) {
 
     /** True if at least one "record calls from apps" target is enabled. */
     fun isAnyAppCallRecordingEnabled() = isRecordWhatsAppCallsEnabled() || isRecordTelegramCallsEnabled()
+
+    /**
+     * Master switch for recording regular telephony (SIM) calls. When off, the telephony pipeline
+     * ([com.coolappstore.evercallrecorder.by.svhp.services.call.CallSessionManager]) never starts
+     * the recording service at all — useful for users who already have a built-in phone recorder
+     * and only want VoIP (app) calls recorded by this app. ON by default.
+     */
+    fun isRecordTelephonyCallsEnabled() = getBoolean(Key.RECORD_TELEPHONY_CALLS, DefaultsValue.RECORD_TELEPHONY_CALLS)
+    fun setRecordTelephonyCallsEnabled(enabled: Boolean) = setBoolean(Key.RECORD_TELEPHONY_CALLS, enabled)
+
+    /**
+     * Whether the original screen-recording mp4 (in DCIM/Screen recordings) should be deleted
+     * after its audio track has been successfully extracted into the recording library.
+     * Only applies to the "Samsung Screen Recorder" audio source. OFF by default.
+     */
+    fun isDeleteScreenRecordingAfterImportEnabled() = getBoolean(Key.DELETE_SCREEN_RECORDING_AFTER_IMPORT, DefaultsValue.DELETE_SCREEN_RECORDING_AFTER_IMPORT)
+    fun setDeleteScreenRecordingAfterImportEnabled(enabled: Boolean) = setBoolean(Key.DELETE_SCREEN_RECORDING_AFTER_IMPORT, enabled)
+
+    /**
+     * How the screen recorder's confirmation dialog is handled (see [ScreenRecorderConfirmMode]).
+     * Only applies to screen-recorder backends (e.g. "Samsung Screen Recorder").
+     */
+    fun getScreenRecorderConfirmMode() = ScreenRecorderConfirmMode.fromKey(getString(Key.SCREEN_RECORDER_CONFIRM_MODE, DefaultsValue.SCREEN_RECORDER_CONFIRM_MODE.key))
+    fun setScreenRecorderConfirmMode(mode: ScreenRecorderConfirmMode) = setString(Key.SCREEN_RECORDER_CONFIRM_MODE, mode.key)
 }
