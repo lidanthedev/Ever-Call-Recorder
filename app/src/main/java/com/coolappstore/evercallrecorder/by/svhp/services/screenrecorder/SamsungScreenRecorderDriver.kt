@@ -19,8 +19,8 @@ import java.io.File
  * Settings tile instead: SystemUI performs the click with its own privileges. The "Start
  * recording" confirmation dialog is accepted via `uiautomator dump` + `input tap` on the
  * positive button's bounds. The dialog's audio option is forced to "Media and mic" (otherwise
- * one side of the call is silent), and the ~3 s pre-recording countdown is skipped by tapping
- * the screen center (verified on One UI 8 / Android 16).
+ * one side of the call is silent). Accessibility mode uses node actions for the dialog.
+ * The pre-recording countdown runs normally in both modes to avoid stray taps.
  */
 class SamsungScreenRecorderDriver : ScreenRecorderDriver() {
 
@@ -59,7 +59,10 @@ class SamsungScreenRecorderDriver : ScreenRecorderDriver() {
      * discriminator for the accessibility confirmation (post-start dialogs lack this node).
      * The positive button uses the framework AlertDialog id from the base default.
      */
-    override val startDialogRequiredAudioOptionId = "$SAMSUNG_CAPTURE_PACKAGE:id/$DIALOG_AUDIO_MEDIA_AND_MIC_ID"
+    override val startDialogRequiredAudioOptionIds = listOf(
+        "$SAMSUNG_CAPTURE_PACKAGE:id/$DIALOG_AUDIO_MEDIA_AND_MIC_ID",
+        "$SAMSUNG_CAPTURE_PACKAGE:id/sound_suggestion_sound_type_all_radio"
+    )
 
     // ── Prerequisites: QS tile must be in the layout or click-tile silently no-ops ──
 
@@ -145,53 +148,6 @@ class SamsungScreenRecorderDriver : ScreenRecorderDriver() {
         val after = xml.substring(idPos)
         val radioTag = Regex("<node[^>]*RadioButton[^>]*>").find(after)?.value ?: return true
         return radioTag.contains("checked=\"true\"")
-    }
-
-    /**
-     * Skips Samsung's ~3 s pre-recording countdown by tapping the screen center (verified
-     * on-device: ~1.4 s vs ~3.7 s to projection-active; upper-third taps are ignored by the
-     * overlay). Multiple spaced taps because the overlay's appearance time varies. Best-effort:
-     * if all taps miss, the countdown simply runs its course and the projection poll still
-     * catches the session start.
-     */
-    override fun afterStartConfirmed() {
-        val (x, y) = getCountdownSkipTapPoint()
-        repeat(3) { attempt ->
-            Thread.sleep(350)
-            AppLogger.d(tag, "Tapping ($x, $y) to skip the recorder countdown (attempt ${attempt + 1})")
-            execShellCommand("input tap $x $y")
-        }
-    }
-
-    /**
-     * Accessibility mode: single center tap for the driver's tap loop — taps keep firing every
-     * poll interval until the projection appears, so the countdown gets skipped regardless of
-     * how late the overlay shows up.
-     */
-    override fun skipCountdownOnce() {
-        val (x, y) = getCountdownSkipTapPoint()
-        AppLogger.d(tag, "Tapping ($x, $y) to skip the recorder countdown (accessibility mode)")
-        execShellCommand("input tap $x $y")
-    }
-
-    /** Screen center parsed from `wm size`, cached per driver lifetime. */
-    private var cachedScreenCenter: Pair<Int, Int>? = null
-
-    private fun getCountdownSkipTapPoint(): Pair<Int, Int> {
-        cachedScreenCenter?.let { return it }
-        val size = execShellCommand("wm size")?.trim().orEmpty()
-        val match = Regex("(\\d+)x(\\d+)").find(size)
-        val point = if (match != null) {
-            val (w, h) = match.destructured
-            // Screen center: verified on-device that only center taps skip the countdown. Center
-            // of an in-call screen is the contact/avatar area, so a stray pass-through tap is
-            // harmless there.
-            Pair(w.toInt() / 2, h.toInt() / 2)
-        } else {
-            Pair(720, 1560) // Center fallback for 1440x3120-class devices.
-        }
-        cachedScreenCenter = point
-        return point
     }
 
     /**

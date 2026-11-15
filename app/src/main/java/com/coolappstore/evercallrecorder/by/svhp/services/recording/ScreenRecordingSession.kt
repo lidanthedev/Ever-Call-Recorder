@@ -125,8 +125,7 @@ class ScreenRecordingSession(
     /**
      * Maps the user's "Recorder dialog confirmation" preference to the shell-side constant.
      * ACCESSIBILITY requires [ScreenRecorderAccessibilityService] to be enabled by the user in
-     * system settings; without it the dialog would never be clicked, so we fall back to the
-     * (slower but self-sufficient) uiautomator path instead of failing the recording.
+     * system settings. Fail safely when disabled instead of switching to coordinate taps.
      */
     private fun resolveConfirmMode(): Int {
         val mode = AppPreferences(context).getScreenRecorderConfirmMode()
@@ -135,7 +134,10 @@ class ScreenRecordingSession(
                 AppLogger.i(TAG, "Dialog confirmation via accessibility service (fast path)")
                 return ScreenRecorderDriver.CONFIRM_ACCESSIBILITY
             }
-            AppLogger.w(TAG, "Accessibility confirmation selected but the service is not enabled; falling back to uiautomator")
+            throw PipelineInitializationException(
+                userFriendlyMessage = context.getString(R.string.settings_screen_recorder_a11y_disabled_warning),
+                technicalLogMessage = "Accessibility confirmation selected but the service is not enabled"
+            )
         }
         return ScreenRecorderDriver.CONFIRM_UIAUTOMATOR
     }
