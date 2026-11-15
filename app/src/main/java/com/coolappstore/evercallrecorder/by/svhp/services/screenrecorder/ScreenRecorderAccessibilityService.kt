@@ -9,13 +9,9 @@
 package com.coolappstore.evercallrecorder.by.svhp.services.screenrecorder
 
 import android.accessibilityservice.AccessibilityService
-import android.accessibilityservice.GestureDescription
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.graphics.Path
-import android.os.Handler
-import android.os.Looper
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -34,14 +30,12 @@ import com.coolappstore.evercallrecorder.by.svhp.utils.AppLogger
  * Samsung-specific. For the Samsung driver it:
  *  1. Forces the dialog's audio option to "Media and mic" (otherwise one side of the call is silent).
  *  2. Clicks the dialog's positive button.
- *  3. Skips the pre-recording countdown with [dispatchGesture] center taps. The shell
- *     process ALSO fires its own blind `input tap`s [ScreenRecorderDriver.EXTERNAL_CONFIRM_TAP_DELAY_MS]
- *     after the tile click in this mode — belt and suspenders; extra center taps are harmless.
+ * The countdown runs normally; no gestures or coordinate taps are sent.
  *
  * The service is restricted (via its xml config `packageNames`) to the registered recorder
  * packages only, so it sees no other app's windows. The user must enable it manually in system
- * Accessibility settings; when it is not enabled, the recording flow falls back to the
- * uiautomator path automatically. It also self-gates on the confirmation-mode preference so
+ * Accessibility settings. When it is not enabled, accessibility-mode recording fails safely.
+ * It also self-gates on the confirmation-mode preference so
  * both mechanisms never race the same dialog, AND on [isConfirmationExpected] so it never
  * confirms a dialog the user opened manually via the QS tile.
  */
@@ -61,13 +55,6 @@ class ScreenRecorderAccessibilityService : AccessibilityService() {
         @Volatile
         var isConfirmationExpected = false
 
-        /** Min delay between two positive-button clicks; repeated window events fire in bursts. */
-        private const val CLICK_DEBOUNCE_MS = 2_000L
-
-        /** Countdown-skip taps: same spacing as the shell-side uiautomator flow (3 taps, 350 ms apart). */
-        private const val COUNTDOWN_SKIP_TAP_COUNT = 3
-        private const val COUNTDOWN_SKIP_TAP_SPACING_MS = 350L
-
         /**
          * True when the user has enabled this service in system Accessibility settings.
          * Reads the flattened `enabled_accessibility_services` secure setting.
@@ -83,10 +70,6 @@ class ScreenRecorderAccessibilityService : AccessibilityService() {
             context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }
     }
-
-    /** Epoch ms of the last successful positive-button click (debounce). */
-    @Volatile
-    private var lastButtonClickMs = 0L
 
     /** Single lazily-created preferences instance reused across events. Reads are always live
      * (SharedPreferences), so the confirmation-mode gate below still sees the current value. */
@@ -116,8 +99,11 @@ class ScreenRecorderAccessibilityService : AccessibilityService() {
         val roots = listOfNotNull(rootInActiveWindow, event.source)
         try {
             for (root in roots) {
-                ensureRequiredAudioOptionSelected(root, driver)
-                clickStartButton(root, driver)
+                if (!isConfirmationExpected) break
+                if (root.packageName?.toString() != driver.recorderPackage) continue
+                if (ensureRequiredAudioOptionSelected(root, driver)) {
+                    clickStartButton(root, driver)
+                }
             }
         } catch (e: Exception) {
             AppLogger.w(TAG, "Error while handling recorder dialog: ${e.message}")
@@ -131,82 +117,48 @@ class ScreenRecorderAccessibilityService : AccessibilityService() {
     /**
      * Selects the driver's required audio option (e.g. Samsung's "Media and mic") when it is
      * not already checked. No-op for vendors whose dialog has no such option
-     * ([ScreenRecorderDriver.startDialogRequiredAudioOptionId] is null).
+     * ([ScreenRecorderDriver.startDialogRequiredAudioOptionIds] is empty).
      * The checked state lives on the (child) checkable node; the container is the clickable one.
      */
-    private fun ensureRequiredAudioOptionSelected(root: AccessibilityNodeInfo, driver: ScreenRecorderDriver) {
-        val optionId = driver.startDialogRequiredAudioOptionId ?: return
-        val container = root.findAccessibilityNodeInfosByViewId(optionId)?.firstOrNull() ?: return
-        if (isChecked(container)) {
-            AppLogger.v(TAG, "Required audio option already selected")
-            return
-        }
-        AppLogger.i(TAG, "Selecting required audio option ($optionId)")
-        container.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+    private fun ensureRequiredAudioOptionSelected(root: AccessibilityNodeInfo, driver: ScreenRecorderDriver): Boolean {
+        if (driver.startDialogRequiredAudioOptionIds.isEmpty()) return true
+        val container = driver.startDialogRequiredAudioOptionIds.firstNotNullOfOrNull { id ->
+            root.findAccessibilityNodeInfosByViewId(id)?.firstOrNull()
+        } ?: return false
+        if (!container.isVisibleToUser || !container.isEnabled) return false
+        if (isChecked(container)) return true
+        if (!container.isClickable) return false
+
+        AppLogger.i(TAG, "Selecting required audio option (${container.viewIdResourceName})")
+        if (!container.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return false
+        return container.refresh() && isChecked(container)
     }
 
     /** True when [node] or any of its descendants is a checked checkable. */
     private fun isChecked(node: AccessibilityNodeInfo): Boolean {
         if (node.isCheckable) return node.isChecked
         for (i in 0 until node.childCount) {
-            node.getChild(i)?.let { child -> if (child.isCheckable) return child.isChecked }
+            node.getChild(i)?.let { child -> if (isChecked(child)) return true }
         }
         return false
     }
 
     /**
-     * Clicks the start dialog's positive button, debounced: the same dialog fires several
-     * window events in a row, and a double click could reach the recorder UI underneath.
+     * Clicks the start dialog's positive button once per app-initiated start attempt.
      *
      * Double-click / wrong-dialog guard: later recorder dialogs (e.g. a stop confirmation) can
      * share the same positive-button id, so the button is only clicked when the driver's
      * required audio-option node exists in the same window — that node is unique to the START
      * dialog. Once the recorder session is running, no other dialog gets auto-clicked.
      * (For drivers WITHOUT a required audio option, the button-id match alone decides.)
-     *
-     * On success, schedules the countdown-skip taps (the shell-side flow cannot time them in
-     * accessibility mode — it does not know when the dialog closes).
      */
     private fun clickStartButton(root: AccessibilityNodeInfo, driver: ScreenRecorderDriver) {
-        val optionId = driver.startDialogRequiredAudioOptionId
-        if (optionId != null && root.findAccessibilityNodeInfosByViewId(optionId).isNullOrEmpty()) return
-
         val button = root.findAccessibilityNodeInfosByViewId(driver.startDialogButtonId)?.firstOrNull() ?: return
-        val now = System.currentTimeMillis()
-        if (now - lastButtonClickMs < CLICK_DEBOUNCE_MS) return
-
-        val clicked = button.takeIf { it.isClickable }?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+        val clicked = button.takeIf { it.isVisibleToUser && it.isEnabled && it.isClickable }
+            ?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
         if (clicked) {
-            lastButtonClickMs = now
+            isConfirmationExpected = false
             AppLogger.i(TAG, "Clicked recorder dialog positive button via accessibility")
-            scheduleCountdownSkipTaps()
         }
-    }
-
-    /**
-     * Skips a pre-recording countdown by tapping the screen center via [dispatchGesture]
-     * (the accessibility-mode replacement for the shell-side `input tap` in
-     * [SamsungScreenRecorderDriver.afterStartConfirmed], which is skipped in this mode).
-     * Multiple spaced taps because the overlay's appearance time varies; a stray center tap
-     * on an in-call screen is harmless (avatar area). Best-effort.
-     */
-    private fun scheduleCountdownSkipTaps() {
-        val handler = Handler(Looper.getMainLooper())
-        repeat(COUNTDOWN_SKIP_TAP_COUNT) { attempt ->
-            handler.postDelayed({
-                AppLogger.d(TAG, "Dispatching center tap to skip the recorder countdown (attempt ${attempt + 1})")
-                dispatchCenterTap()
-            }, COUNTDOWN_SKIP_TAP_SPACING_MS * (attempt + 1))
-        }
-    }
-
-    /** Dispatches a single tap gesture at the screen center. */
-    private fun dispatchCenterTap() {
-        val metrics = resources.displayMetrics
-        val path = Path().apply { moveTo(metrics.widthPixels / 2f, metrics.heightPixels / 2f) }
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0L, 50L))
-            .build()
-        dispatchGesture(gesture, null, null)
     }
 }

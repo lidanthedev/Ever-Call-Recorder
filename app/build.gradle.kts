@@ -117,6 +117,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
+        testInstrumentationRunner = "com.coolappstore.evercallrecorder.by.svhp.ScreenRecorderAccessibilityTest"
         applicationId = "com.coolappstore.evercallrecorder.by.svhp"
         minSdk = 30
         targetSdk = 36

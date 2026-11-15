@@ -12,21 +12,46 @@ entry in `integrations/scrcpy/ScrcpyAudioSource`. Dialog confirmation is user-se
 - **uiautomator (default)** — **option B** below, done entirely in the shell process as a
   dump-and-tap loop (matched by resource-id `android:id/button1` for locale-safety, text as
   fallback; no separate focus poll). Costs ~2–5 s per dump.
-- **accessibility** — app-side `ScreenRecorderAccessibilityService` clicks the dialog in-memory
-  (~ms). The countdown is skipped from BOTH sides: the service's own `dispatchGesture` center
-  taps after its click, and blind shell-side `input tap`s fired in a loop (every 250 ms,
-  starting 0.5 s after the tile click) until the projection appears — the loop survives late
-  countdown overlays. Requires the user to enable the service in system Accessibility settings;
-  `ScreenRecordingSession` falls back to uiautomator when it isn't enabled. The service
-  self-gates on the confirmation-mode preference: without that gate, both mechanisms race the
-  dialog — the service dismisses it instantly, the shell dump never sees the button and
-  reports a false start failure while the recorder runs.
-  NOTE: an earlier accessibility attempt was removed because the dialog never got clicked —
-  likely because a system alert dialog is not necessarily the *active* window. The new
-  implementation queries both `rootInActiveWindow` AND `event.source` for that reason.
+- **accessibility** — app-side `ScreenRecorderAccessibilityService` selects "Media and mic"
+  and clicks Start using `AccessibilityNodeInfo.ACTION_CLICK` on visible, enabled nodes in
+  the recorder package. View IDs are requested with `flagReportViewIds`. The audio selection
+  must be verified before Start is clicked, and each app-initiated attempt is disarmed after
+  a successful Start click. Requires the accessibility service to be enabled; otherwise the
+  attempt fails without falling back to coordinate taps. Both `rootInActiveWindow` and
+  `event.source` are checked because a recorder alert may not be the active window.
+
+The countdown runs normally in both modes. Blind countdown taps from the service and shell
+were removed because failed starts could send taps into the underlying app.
+
+### Accessibility device regression test
+
+`ScreenRecorderAccessibilityTest` uses platform instrumentation without a test dependency.
+It temporarily enables our accessibility service and private recording storage, restores
+settings afterward, and creates a short recording named `AccessibilityTest`. Requires an unlocked Samsung with Shizuku running
+and permission granted to Ever Call Recorder. Use the explicitly selected device serial:
+
+```bash
+ANDROID_HOME=/path/to/android-sdk bash gradlew assembleDebug assembleDebugAndroidTest
+adb -s "$SERIAL" install -r app/build/outputs/apk/debug/app-debug.apk
+adb -s "$SERIAL" install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+adb -s "$SERIAL" shell am instrument -w -r com.coolappstore.evercallrecorder.by.svhp.test/com.coolappstore.evercallrecorder.by.svhp.ScreenRecorderAccessibilityTest
+```
+
+The test asserts that an unarmed start times out with the dialog still open, then selects
+"No sound" before a new start so the service must switch to "Media and mic". It verifies
+projection start/stop and imports a nonempty audio track. It refuses to run if a screen
+recording is already active. The test opens and closes Quick Settings with accessibility
+global actions first: UN1CA's SystemUI can drop a shell tile click when the tile service is cold.
+
+Verified 2026-11-15 on the user's USB S20 FE running UN1CA, which reports `SM-S901E`:
+Smart Capture 6.0.31.21 / Android 16 uses the checkable audio option
+`com.samsung.android.app.smartcapture:id/sound_suggestion_sound_type_all_radio` rather than
+`radio_button_sound_all`. Both IDs are supported. The device smoke test passed the timeout,
+node-based confirmation, start/stop and audio-only import checks. Shizuku ran as root on this
+test device; a live phone/VoIP call was not placed.
 
 Speed findings (verified on-device, 2026-07-31):
-- **The 3-second pre-recording countdown can be skipped by tapping the screen** (any spot;
+- **Historical only, no longer used: the 3-second countdown can be skipped by tapping** (any spot;
   we tap upper-center, clear of the underlying app's in-call buttons). Measured:
   ~1.4 s tap→projection vs ~3.7 s baseline.
 - The tile-presence check (`settings get sysui_qs_tiles`) is cached per shell process.
