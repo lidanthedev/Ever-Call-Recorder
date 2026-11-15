@@ -134,11 +134,11 @@ android {
         // Signing config for CI environments.
         create("ci-release") {
             if (isEnvironmentGithubCI) {
-                storeFile = file(System.getenv("KEYSTORE_FILE") ?: throw GradleException("Keystore file not provided for release signing. env variable: KEYSTORE_FILE"))
-                storePassword = System.getenv("KEYSTORE_PASSWORD") ?: throw GradleException("Keystore password not provided for release signing. env variable: KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("KEY_ALIAS") ?: throw GradleException("Key alias not provided for release signing. env variable: KEY_ALIAS")
-                keyPassword = System.getenv("KEY_PASSWORD") ?:throw GradleException("Key password not provided for release signing. env variable: KEY_PASSWORD")
-
+                // Release inputs are validated by preReleaseBuild; debug CI needs no signing secrets.
+                storeFile = System.getenv("KEYSTORE_FILE")?.let { file(it) }
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
             }
         }
     }
@@ -259,4 +259,14 @@ dependencies {
     // Shizuku
     implementation(libs.shizukuApi)
     implementation(libs.shizukuProvider)
+}
+
+if (isEnvironmentGithubCI) {
+    tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+        doFirst {
+            for (name in listOf("KEYSTORE_FILE", "KEYSTORE_PASSWORD", "KEY_ALIAS", "KEY_PASSWORD")) {
+                requireNotNull(System.getenv(name)) { "$name is required for CI release signing" }
+            }
+        }
+    }
 }
